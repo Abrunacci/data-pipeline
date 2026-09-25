@@ -111,7 +111,7 @@ What Airflow would give is built in:
 - `indicative`: a reference price, not what a trade gets; `final_price_gap` (`percent`,
   `samples`, `first`, `last`) says how much less a trade got, when there are observations.
 
-`GET /v1/rates/{id}/history?from=2026-09-01&to=2026-09-25`
+`GET /v1/rates/{id}/history?from=2026-09-24&to=2026-09-25`
 
 ```json
 {
@@ -129,15 +129,17 @@ What Airflow would give is built in:
 
 - One value a day, the one with the latest `as_of` that day (days in Buenos Aires time), only
   for the days that have one.
-- `from` and `to` are optional: by default, the last 30 days. At most 400 days per request;
-  more, or `from` after `to`, is a 422. An unknown series is a 404.
+- `from` and `to` are optional: by default, the last 30 days; `first` and `last` repeat the
+  range. At most 400 days per request, between 2000-01-01 and tomorrow. Otherwise a 422 with
+  `detail` `range_too_long`, `from_after_to` or `date_out_of_range` (a date that is not a date
+  gets FastAPI's usual 422). An unknown series is a 404.
 - The MEP's past closes, since 2018, are loaded once from
   [ArgentinaDatos](https://argentinadatos.com) the first time the app starts: the buy side,
   as of 17:00, on weekdays, up to yesterday. `source` tells them apart from the values the
   pipeline read itself.
 
-`GET /health` returns 200 when the app can read its table, and 503 when it cannot. Both
-endpoints answer 503 when the database is down.
+`GET /health` returns 200 when the app can read its table, and 503 when it cannot. Every
+endpoint answers 503 when the database is down.
 
 ## Running it
 

@@ -19,6 +19,8 @@ from sqlalchemy import (
     text,
 )
 
+from data_pipeline.core.readings import HeldBack
+
 
 class Status(StrEnum):
     ACCEPTED = "accepted"
@@ -71,6 +73,11 @@ observations = Table(
     ),
     CheckConstraint(
         f"status <> '{Status.REJECTED}' OR reason IS NOT NULL", name="reason_when_rejected"
+    ),
+    CheckConstraint(
+        f"status <> '{Status.SUSPECT}' OR reason IS NULL"
+        f" OR reason IN ({', '.join(repr(why.value) for why in HeldBack)})",
+        name="suspect_reason_known",
     ),
     CheckConstraint(
         f"status = '{Status.REJECTED}' OR value IS NOT NULL", name="value_unless_rejected"

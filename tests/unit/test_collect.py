@@ -346,10 +346,16 @@ async def test_a_source_that_cannot_build_its_request_is_a_source_bug() -> None:
 
 
 async def test_a_failed_fetch_is_stamped_when_it_gave_up() -> None:
-    # A clock that moves a minute each time it is read: the stamp must be taken after the
-    # fetch, not before it.
-    ticks = iter(NOW + timedelta(minutes=n) for n in range(10))
-    store = MemoryStore()
-    client = http({"primary": [httpx.Response(404)], "fallback": [httpx.Response(404)]})
-    observations = await collect(SERIES, SOURCES, client, store, lambda: next(ticks))
-    assert [o.fetched_at for o in observations] == [NOW, NOW + timedelta(minutes=1)]
+    # Each fetch takes a minute: the stamp must be taken after it, not before.
+    clock = [NOW]
+
+    def slow_404(request: httpx.Request) -> httpx.Response:
+        clock[0] += timedelta(minutes=1)
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(slow_404))
+    observations = await collect(SERIES, SOURCES, client, MemoryStore(), lambda: clock[0])
+    assert [o.fetched_at for o in observations] == [
+        NOW + timedelta(minutes=1),
+        NOW + timedelta(minutes=2),
+    ]

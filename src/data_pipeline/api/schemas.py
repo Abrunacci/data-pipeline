@@ -64,6 +64,8 @@ class LatestRates(BaseModel):
 HISTORY_ZONE = ZoneInfo("America/Argentina/Buenos_Aires")
 DEFAULT_HISTORY_DAYS = 30
 MAX_HISTORY_DAYS = 400
+# No series has values before this; it also keeps date arithmetic far from date.min.
+EARLIEST_HISTORY_DAY = date(2000, 1, 1)
 
 
 class DayValue(BaseModel):
@@ -95,6 +97,9 @@ class DayRange:
 def history_range(first: date | None, last: date | None, today: date) -> DayRange:
     """The days a history request covers, or a 422 naming the problem."""
     last = today if last is None else last
+    for day in (first, last):
+        if day is not None and not EARLIEST_HISTORY_DAY <= day <= today + timedelta(days=1):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "date_out_of_range")
     first = last - timedelta(days=DEFAULT_HISTORY_DAYS - 1) if first is None else first
     if first > last:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "from_after_to")

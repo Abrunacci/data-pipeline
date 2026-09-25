@@ -16,8 +16,12 @@ depends_on: str | Sequence[str] | None = None
 
 # Past values loaded from a history source have their own status, "backfill". The release before
 # this one never writes it. After a rollback it would still publish the same current values, but
-# it would take a backfill row for the newest attempt: it could skip one slot, and show a wrong
-# last_attempt_at, until the next run.
+# until a series' next run it would take the backfill rows for the newest attempt and the newest
+# decision: it could skip one slot, show a wrong last_attempt_at, and show
+# pending_confirmation false for a suspect that is still pending.
+#
+# The constraint and the index are built under a lock, with the other pending migrations in one
+# transaction: fine at this table's size. See CONTRIBUTING for a large table.
 
 
 def upgrade() -> None:

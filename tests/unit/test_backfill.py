@@ -126,7 +126,7 @@ async def test_a_broken_history_source_never_stops_the_schedule() -> None:
         for s in load_series(DEFAULT_SERIES_FILE, available_sources(), available_history_sources())
         if s.id == "bitso_usdt_ars"
     )
-    series = replace(bitso, history=SOURCE.name)
+    series = replace(bitso, history=SOURCE.name, hours=MEP.hours)
     answers = {
         "api.argentinadatos.com": b"[]",
         "api.bitso.com": (

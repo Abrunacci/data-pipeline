@@ -54,8 +54,7 @@ async def backfill(
 def _keep(series: Series, reading: Reading, fetched_at: datetime) -> bool:
     if value_problem(reading.value) is not None:
         return False
-    if series.hours is None:
-        return reading.as_of < fetched_at
+    assert series.hours is not None  # Series refuses a history source without hours
     zone = series.hours.zone
     day = reading.as_of.astimezone(zone).date()
     before_today = day < fetched_at.astimezone(zone).date()

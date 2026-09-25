@@ -25,9 +25,12 @@ class MemoryStore:
         self.observations: list[Observation] = []
         # Past values, kept apart: they are neither attempts nor decisions.
         self.history: list[tuple[str, str, Reading]] = []
+        # The recording order of both, like the Postgres ids: it breaks as_of ties in daily().
+        self._order: list[tuple[str, int]] = []
         self.busy: set[str] = set()
 
     async def record(self, observation: Observation) -> None:
+        self._order.append(("observation", len(self.observations)))
         self.observations.append(observation)
 
     def _of(self, series_id: str) -> list[Observation]:
@@ -67,23 +70,28 @@ class MemoryStore:
     async def record_history(
         self, series_id: str, source: str, fetched_at: datetime, readings: Sequence[Reading]
     ) -> None:
-        self.history.extend((series_id, source, reading) for reading in readings)
+        for reading in readings:
+            self._order.append(("history", len(self.history)))
+            self.history.append((series_id, source, reading))
 
     async def has_history(self, series_id: str) -> bool:
         return any(series == series_id for series, _, _ in self.history)
 
     async def daily(self, series_id: str, first: date, last: date, zone: ZoneInfo) -> list[Day]:
-        # In recording order, history first as in any real run; the latest as_of wins a day.
-        values = [
-            (source, reading) for series, source, reading in self.history if series == series_id
-        ]
-        for o in self._of(series_id):
-            if isinstance(o.outcome, Accepted):
-                values.append((o.source, o.outcome.reading))
+        # The value with the latest as_of each day; on a tie, the one recorded last.
         by_day: dict[date, Day] = {}
-        for source, reading in values:
+        for kind, index in self._order:
+            if kind == "history":
+                series, source, reading = self.history[index]
+            else:
+                o = self.observations[index]
+                if not isinstance(o.outcome, Accepted):
+                    continue
+                series, source, reading = o.series_id, o.source, o.outcome.reading
             day = reading.as_of.astimezone(zone).date()
-            if first <= day <= last and (day not in by_day or reading.as_of >= by_day[day].as_of):
+            if series != series_id or not first <= day <= last:
+                continue
+            if day not in by_day or reading.as_of >= by_day[day].as_of:
                 by_day[day] = Day(day, reading.value, reading.as_of, source)
         return [by_day[day] for day in sorted(by_day)]
 

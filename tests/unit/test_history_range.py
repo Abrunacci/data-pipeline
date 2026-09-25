@@ -28,6 +28,24 @@ def test_400_days_is_the_limit() -> None:
     assert error.value.detail == "range_too_long"
 
 
+@pytest.mark.parametrize(
+    ("first", "last"),
+    [
+        (date(9999, 12, 1), date(9999, 12, 31)),
+        (None, date(1, 1, 5)),
+        (date(1999, 12, 31), None),
+        (None, date(2026, 9, 27)),
+    ],
+)
+def test_dates_outside_the_history_are_refused(first: date | None, last: date | None) -> None:
+    with pytest.raises(HTTPException) as error:
+        history_range(first, last, TODAY)
+    assert error.value.detail == "date_out_of_range"
+    # Up to tomorrow is fine: it may already be tomorrow somewhere.
+    assert history_range(date(2000, 1, 1), date(2000, 1, 1), TODAY).first == date(2000, 1, 1)
+    assert history_range(None, date(2026, 9, 26), TODAY).last == date(2026, 9, 26)
+
+
 def test_from_after_to_is_refused() -> None:
     with pytest.raises(HTTPException) as error:
         history_range(date(2026, 9, 26), TODAY, TODAY)

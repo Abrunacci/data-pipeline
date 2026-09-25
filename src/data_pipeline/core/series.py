@@ -48,6 +48,9 @@ class Series:
             raise ValueError(f"series {self.id} lists a source twice")
         if self.every <= timedelta(0):
             raise ValueError(f"series {self.id}: every must be positive, got {self.every}")
+        # Past values are kept up to the day before, and "day" needs the series' zone.
+        if self.history is not None and self.hours is None:
+            raise ValueError(f"series {self.id}: a history source needs opening hours")
         if self.gap is not None and not self.indicative:
             raise ValueError(f"series {self.id}: only an indicative series has a gap")
         if self.control is not None and self.control in self.sources[:1]:

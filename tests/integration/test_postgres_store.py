@@ -374,7 +374,9 @@ BUENOS_AIRES = ZoneInfo("America/Argentina/Buenos_Aires")
 
 async def test_past_values_are_history_not_attempts(store: PostgresStore) -> None:
     assert not await store.has_history("rate")
-    await store.record(at(0, Accepted(reading("1600"))))
+    await store.record(at(-10, Accepted(reading("1600"))))
+    # A suspect pending when the app starts and loads the past values.
+    await store.record(at(0, Suspect(reading("1800"), HeldBack.JUMP, "held")))
     past = [reading("1500", -60 * 24 * 2), reading("1550", -60 * 24)]
     await store.record_history("rate", "history", T0 + timedelta(minutes=5), past)
     assert await store.has_history("rate")
@@ -383,7 +385,7 @@ async def test_past_values_are_history_not_attempts(store: PostgresStore) -> Non
     assert latest.published is not None
     assert latest.published.value == Decimal(1600)
     assert latest.last_attempt_at == T0
-    assert latest.suspect_at is None
+    assert latest.suspect_at == T0
     # The newest row is a past value stamped 18:05: it is not this slot's attempt.
     assert not await store.attempted_in(
         "rate", T0 + timedelta(minutes=5), T0 + timedelta(minutes=10)
@@ -407,3 +409,33 @@ async def test_daily_keeps_the_latest_value_of_each_local_day(store: PostgresSto
     ]
     only_24 = await store.daily("rate", date(2026, 9, 24), date(2026, 9, 24), BUENOS_AIRES)
     assert [day.date for day in only_24] == [date(2026, 9, 24)]
+
+
+async def test_daily_prefers_the_latest_as_of_whatever_was_recorded_first(
+    store: PostgresStore,
+) -> None:
+    # As in production: live readings are in the table before the past values are loaded.
+    # 17:25 in Buenos Aires (live) beats 17:00 (the loaded close), though recorded earlier.
+    live = datetime(2026, 9, 24, 20, 25, tzinfo=UTC)
+    await store.record(Observation("rate", "live", live, Accepted(Reading(Decimal(1540), live))))
+    close = datetime(2026, 9, 24, 20, 0, tzinfo=UTC)
+    await store.record_history("rate", "history", T0, [Reading(Decimal(1537), close)])
+    # On a tie, the one recorded last.
+    tie = datetime(2026, 9, 23, 20, 0, tzinfo=UTC)
+    await store.record(Observation("rate", "live", tie, Accepted(Reading(Decimal(1530), tie))))
+    await store.record_history("rate", "history", T0, [Reading(Decimal(1531), tie)])
+    days = await store.daily("rate", date(2026, 9, 23), date(2026, 9, 24), BUENOS_AIRES)
+    assert [(day.value, day.source) for day in days] == [
+        (Decimal(1531), "history"),
+        (Decimal(1540), "live"),
+    ]
+
+
+async def test_daily_uses_only_published_and_loaded_values(store: PostgresStore) -> None:
+    await store.record(at(0, Accepted(reading("1600", 0))))
+    # Newer as_of the same day, but not published values.
+    await store.record(at(10, Suspect(reading("1800", 10), HeldBack.JUMP, "held")))
+    await store.record(at(11, Control(reading("1700", 11))))
+    await store.record(at(12, Rejected(Rejection.IMPLAUSIBLE, "no", reading("16", 12))))
+    days = await store.daily("rate", date(2026, 9, 25), date(2026, 9, 25), BUENOS_AIRES)
+    assert [day.value for day in days] == [Decimal(1600)]
