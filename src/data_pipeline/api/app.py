@@ -8,14 +8,15 @@ import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated
 
 import httpx
 from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -44,14 +45,9 @@ def create_app(settings: Settings) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        engine = _create_engine(
-            settings.database_url,
-            pool_size=3,
-            max_overflow=2,
-            pool_timeout=DATABASE_TIMEOUT_SECONDS,
-        )
+        engine = _create_engine(settings.database_url, pooled=True)
         # Each series holds a lock connection for its whole run; see PostgresStore.
-        lock_engine = _create_engine(settings.database_url, poolclass=NullPool)
+        lock_engine = _create_engine(settings.database_url, pooled=False)
         store = PostgresStore(engine, lock_engine)
         async with httpx.AsyncClient(
             timeout=HTTP_TIMEOUT, headers={"User-Agent": settings.user_agent}
@@ -76,9 +72,12 @@ def create_app(settings: Settings) -> FastAPI:
             CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["GET"]
         )
 
-    @app.exception_handler(SQLAlchemyError)
-    async def database_unavailable(request: Request, error: SQLAlchemyError) -> JSONResponse:
-        logger.error("database error on %s: %s", request.url.path, error)
+    # Only for a database that cannot be reached or does not answer in time. Any other database
+    # error is a bug, and stays a 500 with its traceback in the log.
+    @app.exception_handler(OperationalError)
+    @app.exception_handler(PoolTimeoutError)
+    async def database_unavailable(request: Request, error: Exception) -> JSONResponse:
+        logger.error("database unavailable on %s: %s", request.url.path, error)
         return JSONResponse(
             {"detail": "database_unavailable"}, status_code=status.HTTP_503_SERVICE_UNAVAILABLE
         )
@@ -92,7 +91,7 @@ def create_app(settings: Settings) -> FastAPI:
             async with asyncio.timeout(HEALTH_TIMEOUT_SECONDS), engine.connect() as connection:
                 await connection.execute(select(observations.c.id).limit(1))
         except (SQLAlchemyError, OSError, TimeoutError) as error:
-            logger.error("health check failed: %s", error)
+            logger.exception("health check failed: %s", error)
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return Health(status="database_unavailable")
         return Health(status="ok")
@@ -119,12 +118,21 @@ def _start(
     ]
 
 
-def _create_engine(url: str, **options: Any) -> AsyncEngine:
+def _create_engine(url: str, *, pooled: bool) -> AsyncEngine:
+    connect_args = {
+        "connect_timeout": DATABASE_TIMEOUT_SECONDS,
+        # Timestamps come back in UTC whatever the server's time zone, and no query runs for
+        # longer than the database timeout.
+        "options": f"-c timezone=UTC -c statement_timeout={DATABASE_TIMEOUT_SECONDS}s",
+    }
+    if not pooled:
+        return create_async_engine(url, poolclass=NullPool, connect_args=connect_args)
     return create_async_engine(
         url,
-        # Timestamps come back in UTC whatever the server's time zone.
-        connect_args={"connect_timeout": DATABASE_TIMEOUT_SECONDS, "options": "-c timezone=UTC"},
-        **options,
+        pool_size=3,
+        max_overflow=2,
+        pool_timeout=DATABASE_TIMEOUT_SECONDS,
+        connect_args=connect_args,
     )
 
 

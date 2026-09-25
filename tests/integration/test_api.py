@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -8,7 +9,7 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from data_pipeline.api.app import create_app
+from data_pipeline.api.app import HEALTH_TIMEOUT_SECONDS, create_app
 from data_pipeline.config import Settings
 from data_pipeline.core.readings import Accepted, Observation, Reading, Suspect
 from data_pipeline.storage.postgres import PostgresStore
@@ -95,6 +96,31 @@ async def client_without_database() -> AsyncIterator[httpx.AsyncClient]:
         httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as http,
     ):
         yield http
+
+
+async def test_a_database_that_does_not_answer_fails_the_health_check_in_time() -> None:
+    # Accepts connections and never answers, like a database behind a network partition.
+    held: list[asyncio.StreamWriter] = []
+    silent = await asyncio.start_server(lambda _, writer: held.append(writer), "127.0.0.1", 0)
+    port = silent.sockets[0].getsockname()[1]
+    app = create_app(
+        Settings(database_url=f"postgresql+psycopg://u:p@127.0.0.1:{port}/db", run_scheduler=False)
+    )
+    try:
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as http,
+        ):
+            started = asyncio.get_running_loop().time()
+            response = await http.get("/health")
+            elapsed = asyncio.get_running_loop().time() - started
+    finally:
+        for writer in held:
+            writer.close()
+        silent.close()
+        await silent.wait_closed()
+    assert response.status_code == 503
+    assert elapsed < HEALTH_TIMEOUT_SECONDS + 1
 
 
 async def test_without_a_database_health_and_rates_answer_503(
