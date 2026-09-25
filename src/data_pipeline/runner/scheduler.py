@@ -59,7 +59,9 @@ async def run_forever(
 ) -> None:
     """Run ``series`` now if its current slot has not run, then at the start of every slot.
 
-    An error in one run is logged and the next slot runs anyway.
+    An error in one run is logged and the next slot runs anyway. A run that starts at the very
+    end of a slot and ends in the next one counts as that next slot's run, so that slot is
+    skipped; it only happens at startup.
     """
     while True:
         try:
