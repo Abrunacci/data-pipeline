@@ -33,21 +33,33 @@ class Rejection(StrEnum):
     TOO_LARGE = "too_large"
     TOO_MANY_DECIMALS = "too_many_decimals"
     IMPLAUSIBLE = "implausible"
+    NO_QUOTE = "no_quote"
     STALE = "stale"
     FROM_THE_FUTURE = "from_the_future"
 
 
 @dataclass(frozen=True, slots=True)
 class Accepted:
-    """A reading that is published. ``confirmed`` is True when it ended a run of suspects."""
+    """A reading that is published. ``confirmed`` is True when it was a suspect that confirmed
+    itself, and ``detail`` says how."""
 
     reading: Reading
     confirmed: bool = False
+    detail: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class Suspect:
-    """A valid reading too far from the last accepted one, held back until it is confirmed."""
+    """A valid reading held back until it is confirmed; ``detail`` says why."""
+
+    reading: Reading
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class Control:
+    """A valid reading from a series' control source. It is never published: it only tells
+    whether the source's reading can be trusted."""
 
     reading: Reading
 
@@ -61,7 +73,7 @@ class Rejected:
     reading: Reading | None = None
 
 
-type Outcome = Accepted | Suspect | Rejected
+type Outcome = Accepted | Suspect | Control | Rejected
 
 
 @dataclass(frozen=True, slots=True)

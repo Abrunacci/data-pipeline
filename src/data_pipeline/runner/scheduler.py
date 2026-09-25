@@ -44,6 +44,8 @@ async def run_slot(
         if not alone:
             return False
         start = slot_start(now(), series.every)
+        if not series.runs_at(start):
+            return False
         if await store.attempted_in(series.id, start, start + series.every):
             return False
         await collect(series, sources, client, store, now)

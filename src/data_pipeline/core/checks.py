@@ -1,8 +1,9 @@
 """The checks a reading goes through before it is published.
 
 They run in order: the value itself (``value_problem``), then whether it is plausible and
-fresh (``reading_problem``), and last whether it follows from the values before it
-(``decide``). A malformed response never gets here: sources refuse it when they parse it.
+fresh (``reading_problem``), and last whether it follows from the values before it and agrees
+with the series' control source (``decide``). A malformed response never gets here: sources
+refuse it when they parse it.
 """
 
 from __future__ import annotations
@@ -40,17 +41,17 @@ class Range:
 
 @dataclass(frozen=True, slots=True)
 class Rules:
-    """How a series is checked.
+    """How a series is checked. ``max_jump`` and ``control_within`` are fractions (0.05 is 5 %).
 
-    ``max_jump`` and ``confirm_within`` are fractions (0.05 is 5 %). A reading that moves more
-    than ``max_jump`` from the last accepted value is a suspect; it is confirmed when the
-    ``confirmations`` readings after it stay within ``confirm_within`` of it.
+    A valid reading is held back as a suspect when it moves more than ``max_jump`` from the last
+    accepted value (a jump), or when the series' control source disagrees with it by more than
+    ``control_within``. See ``decide`` for how a suspect gets confirmed.
     """
 
     plausible: Range
     max_age: timedelta
     max_jump: Decimal
-    confirm_within: Decimal
+    control_within: Decimal = Decimal("0.015")
     confirmations: int = 2
 
     def __post_init__(self) -> None:
@@ -58,10 +59,8 @@ class Rules:
             raise ValueError(f"max_age must be positive, got {self.max_age}")
         if not 0 < self.max_jump < 1:
             raise ValueError(f"max_jump must be between 0 and 1, got {self.max_jump}")
-        if not 0 < self.confirm_within < self.max_jump:
-            raise ValueError(
-                f"confirm_within must be between 0 and max_jump, got {self.confirm_within}"
-            )
+        if not 0 < self.control_within < 1:
+            raise ValueError(f"control_within must be between 0 and 1, got {self.control_within}")
         if self.confirmations < 1:
             raise ValueError(f"confirmations must be at least 1, got {self.confirmations}")
 
@@ -109,9 +108,13 @@ def value_problem(value: Decimal) -> tuple[Rejection, str] | None:
 
 
 def reading_problem(
-    reading: Reading, rules: Rules, fetched_at: datetime
+    reading: Reading, rules: Rules, fetched_at: datetime, age: timedelta
 ) -> tuple[Rejection, str] | None:
-    """Why ``reading`` cannot be used, or None if it can."""
+    """Why ``reading`` cannot be used, or None if it can.
+
+    ``age`` is how old the reading is when it is fetched, as the series counts it: for a market
+    with opening hours, only the time the market was open counts.
+    """
     if (problem := value_problem(reading.value)) is not None:
         return problem
     if reading.value not in rules.plausible:
@@ -121,8 +124,8 @@ def reading_problem(
         )
     if reading.as_of > fetched_at + CLOCK_SKEW:
         return Rejection.FROM_THE_FUTURE, f"as_of {reading.as_of}, fetched at {fetched_at}"
-    if fetched_at - reading.as_of > rules.max_age:
-        return Rejection.STALE, f"as_of {reading.as_of} is older than {rules.max_age}"
+    if age > rules.max_age:
+        return Rejection.STALE, f"as_of {reading.as_of} is {age} old, more than {rules.max_age}"
     return None
 
 
@@ -130,30 +133,60 @@ def decide(
     reading: Reading,
     last_accepted: Decimal | None,
     suspects: Sequence[Decimal],
+    control: Decimal | None,
     rules: Rules,
 ) -> Accepted | Suspect:
     """Whether a valid reading is published now or held back as a suspect.
 
-    ``suspects`` are the values held back since ``last_accepted``, oldest first. They form runs:
-    a suspect within ``confirm_within`` of the first one in the current run joins it, and any
-    other starts a new run. A reading that joins a run which already has
-    ``confirmations - 1`` followers confirms it: the market really moved.
+    - ``suspects``: the values held back since ``last_accepted`` that have not expired, oldest
+      first.
+    - ``control``: the control source's value this run, or None if the series has none or it
+      failed. A control outage never holds a value back.
+
+    A reading is accepted when it is within ``max_jump`` of the last accepted value and the
+    control does not disagree. Otherwise it is a suspect, and it confirms itself:
+
+    - a jump, at once, when the control agrees with it;
+    - a jump, when the ``confirmations`` suspects just before it jumped the same way: the market
+      moved, even if it keeps moving;
+    - a disagreement with the control, when the ``confirmations`` suspects just before it are
+      within ``max_jump`` of it: the value persists, whatever the control says.
     """
-    if last_accepted is None or _within(reading.value, last_accepted, rules.max_jump):
+    value = reading.value
+    if last_accepted is None:
         return Accepted(reading)
+    jump = not _within(value, last_accepted, rules.max_jump)
+    agrees = control is not None and _within(value, control, rules.control_within)
+    if not jump and (control is None or agrees):
+        return Accepted(reading)
+    if jump and agrees:
+        return Accepted(reading, confirmed=True, detail=f"the control source agrees ({control})")
 
-    anchor: Decimal | None = None
-    followers = 0
-    for value in suspects:
-        if anchor is not None and _within(value, anchor, rules.confirm_within):
-            followers += 1
-        else:
-            anchor, followers = value, 0
+    if jump:
+        up = value > last_accepted
 
-    joins = anchor is not None and _within(reading.value, anchor, rules.confirm_within)
-    if joins and followers + 1 >= rules.confirmations:
-        return Accepted(reading, confirmed=True)
-    return Suspect(reading)
+        def in_run(suspect: Decimal) -> bool:
+            beyond = not _within(suspect, last_accepted, rules.max_jump)
+            return beyond and (suspect > last_accepted) == up
+
+        why = f"jumped from {last_accepted}"
+        how = "the market kept moving the same way"
+    else:
+
+        def in_run(suspect: Decimal) -> bool:
+            return _within(suspect, value, rules.max_jump)
+
+        why = f"the control source says {control}"
+        how = "the value persisted"
+
+    run = 0
+    for suspect in reversed(suspects):
+        if not in_run(suspect):
+            break
+        run += 1
+    if run >= rules.confirmations:
+        return Accepted(reading, confirmed=True, detail=f"{how} for {run + 1} readings")
+    return Suspect(reading, detail=why)
 
 
 def _within(value: Decimal, reference: Decimal, fraction: Decimal) -> bool:

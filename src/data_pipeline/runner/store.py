@@ -26,7 +26,8 @@ class Published:
 class SeriesState:
     """What the runner needs to decide on a new reading.
 
-    ``suspects`` are the values held back since the last accepted one, oldest first.
+    ``suspects`` are the values held back since the last accepted one and not expired, oldest
+    first.
     """
 
     last_accepted: Decimal | None
@@ -35,18 +36,20 @@ class SeriesState:
 
 @dataclass(frozen=True, slots=True)
 class Latest:
-    """What the API shows for a series. ``pending`` is True when the newest valid reading is a
-    suspect, so the published value may be about to change."""
+    """What the API shows for a series. ``suspect_at`` is when the newest valid reading was
+    fetched, if it is a suspect: the published value may be about to change."""
 
     published: Published | None
-    pending: bool
+    suspect_at: datetime | None
     last_attempt_at: datetime | None
 
 
 class Store(Protocol):
     async def record(self, observation: Observation) -> None: ...
 
-    async def state(self, series_id: str) -> SeriesState: ...
+    async def state(self, series_id: str, since: datetime) -> SeriesState:
+        """The last accepted value, and the suspects after it fetched at or after ``since``."""
+        ...
 
     async def latest(self, series_id: str) -> Latest: ...
 

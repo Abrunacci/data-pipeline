@@ -24,6 +24,8 @@ POSTGRES_IMAGE = (
 )
 OWNER = "pipeline"
 APP_USER = "pipeline_app"
+# Can connect and nothing else: for errors that are bugs, not outages.
+NO_GRANTS = "no_grants"
 PASSWORD = "test"  # a throwaway test container
 
 
@@ -31,6 +33,7 @@ PASSWORD = "test"  # a throwaway test container
 class Urls:
     owner: str
     app: str
+    no_grants: str
 
 
 @pytest.fixture(scope="session")
@@ -40,11 +43,14 @@ def urls() -> Iterator[Urls]:
         database = superuser.database
         admin = create_engine(superuser)
         with admin.begin() as connection:
-            for role in (OWNER, APP_USER):
+            quote = connection.dialect.identifier_preparer.quote
+            db = quote(str(database))
+            roles = [quote(role) for role in (OWNER, APP_USER, NO_GRANTS)]
+            for role in roles:
                 connection.execute(text(f"CREATE ROLE {role} LOGIN PASSWORD '{PASSWORD}'"))
-            connection.execute(text(f"ALTER DATABASE {database} OWNER TO {OWNER}"))
-            connection.execute(text(f"REVOKE CONNECT ON DATABASE {database} FROM PUBLIC"))
-            connection.execute(text(f"GRANT CONNECT ON DATABASE {database} TO {OWNER}, {APP_USER}"))
+            connection.execute(text(f"ALTER DATABASE {db} OWNER TO {roles[0]}"))
+            connection.execute(text(f"REVOKE CONNECT ON DATABASE {db} FROM PUBLIC"))
+            connection.execute(text(f"GRANT CONNECT ON DATABASE {db} TO {', '.join(roles)}"))
         admin.dispose()
         owner = superuser.set(username=OWNER, password=PASSWORD).render_as_string(
             hide_password=False
@@ -53,8 +59,13 @@ def urls() -> Iterator[Urls]:
             env.setenv("MIGRATION_DATABASE_URL", owner)
             env.setenv("APP_DB_USER", APP_USER)
             command.upgrade(Config(ROOT / "alembic.ini"), "head")
-        app = superuser.set(username=APP_USER, password=PASSWORD)
-        yield Urls(owner=owner, app=app.render_as_string(hide_password=False))
+
+        def as_role(role: str) -> str:
+            return superuser.set(username=role, password=PASSWORD).render_as_string(
+                hide_password=False
+            )
+
+        yield Urls(owner=owner, app=as_role(APP_USER), no_grants=as_role(NO_GRANTS))
 
 
 @pytest.fixture

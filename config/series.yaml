@@ -1,17 +1,59 @@
 # The series the pipeline collects. Each id is the public name of the value and never changes:
 # the cuanto-cuesta calculator looks rates up by the same ids (RATE_FIELDS in
-# frontend/src/calculator/data/routes.ts).
+# frontend/src/calculator/data/routes.ts). A new series takes the id the calculator defines.
 #
-# Numbers are read as exact decimals. Percentages are in percent: 5 is 5 %.
+# - sources: tried in order until one gives a valid reading; control: read every run to check
+#   it, never published (see core/checks.py, decide).
+# - hours: when the series runs and its values age. Times are quoted: YAML reads 10:45 as 645.
+# - Numbers are read as exact decimals. Percentages are in percent: 5 is 5 %.
+# - plausible: the same sanity ranges the calculator uses (frontend/src/form/plausible.ts).
 series:
+  - id: mep
+    description: ARS paid for each USD sold through the MEP (the "compra" side)
+    sources: [dolarapi_mep_compra]
+    # Ámbito publishes a single MEP price, between DolarApi's compra and venta.
+    control: ambito_mep
+    every_minutes: 15
+    # Weekdays, from before the market opens (11:00) to after the MEP settles, in Buenos Aires.
+    # Holidays are not known: on one, the value shows as stale.
+    hours: {weekdays: [0, 1, 2, 3, 4], opens: "10:45", closes: "17:30",
+            zone: America/Argentina/Buenos_Aires}
+    plausible: {min: 500, max: 50000}
+    # Open-market time only. DolarApi updated every few minutes on 2026-09-25.
+    max_age_minutes: 60
+    # The MEP moved 1.2 % in all of September 2026.
+    max_jump_percent: 5
+
+  - id: p2p_usdt_usd
+    description: >-
+      USD paid for each USDT bought on Binance P2P: median of the 5 cheapest merchant ads that
+      take a 500 USD order, from merchants with 95 % of orders completed
+    sources: [binance_p2p_usdt_usd_buy_median]
+    every_minutes: 10
+    plausible: {min: 0.5, max: 2}
+    # The ads carry no time: a reading is as of when it was fetched.
+    max_age_minutes: 30
+    # Ads moved between 1.000 and 1.003 on 2026-09-25.
+    max_jump_percent: 2
+
   - id: bitso_usdt_ars
     description: ARS paid for each USDT sold on Bitso as a taker (best bid)
     sources: [bitso_usdt_ars_bid]
+    control: criptoya_bitso_usdt_ars_bid
     every_minutes: 10
-    # The same sanity range the calculator uses (frontend/src/form/plausible.ts).
     plausible: {min: 500, max: 50000}
     # Bitso stamps its ticker when it answers, so an older one means something is stuck.
     max_age_minutes: 30
     # Bitso moved 1.4 % in the 24 hours before 2026-09-25; 5 % in ten minutes is not normal.
     max_jump_percent: 5
-    confirm_within_percent: 0.5
+
+  - id: arq_usd_ars
+    description: ARS ARQ pays for each USDc, taken at par with USD (its bid)
+    # ARQ's own ticker is not documented; CriptoYa repeats it, so it is the fallback too.
+    sources: [arq_usdc_ars_bid, criptoya_arq_usdc_ars_bid]
+    control: criptoya_arq_usdc_ars_bid
+    official_source: false
+    every_minutes: 10
+    plausible: {min: 500, max: 50000}
+    max_age_minutes: 30
+    max_jump_percent: 5

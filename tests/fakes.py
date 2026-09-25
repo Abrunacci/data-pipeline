@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from decimal import Decimal
 
-from data_pipeline.core.readings import Accepted, Observation, Rejected, Suspect
+from data_pipeline.core.readings import Accepted, Control, Observation, Rejected, Suspect
 from data_pipeline.runner.store import Latest, Published, SeriesState
 
 
@@ -23,32 +23,33 @@ class MemoryStore:
         # In the order they were recorded, like the Postgres store's ids.
         return [o for o in self.observations if o.series_id == series_id]
 
-    async def state(self, series_id: str) -> SeriesState:
+    async def state(self, series_id: str, since: datetime) -> SeriesState:
         last: Decimal | None = None
         suspects: list[Decimal] = []
         for o in self._of(series_id):
             match o.outcome:
                 case Accepted(reading=reading):
                     last, suspects = reading.value, []
-                case Suspect(reading=reading):
+                case Suspect(reading=reading) if o.fetched_at >= since:
                     suspects.append(reading.value)
-                case Rejected():
+                case Suspect() | Control() | Rejected():
                     pass
         return SeriesState(last_accepted=last, suspects=suspects)
 
     async def latest(self, series_id: str) -> Latest:
         history = self._of(series_id)
-        accepted = [o for o in history if isinstance(o.outcome, Accepted)]
-        valid = [o for o in history if not isinstance(o.outcome, Rejected)]
         published = None
-        if accepted:
-            last = accepted[-1]
-            assert isinstance(last.outcome, Accepted)
-            reading = last.outcome.reading
-            published = Published(reading.value, reading.as_of, last.fetched_at, last.source)
+        for o in history:
+            if isinstance(o.outcome, Accepted):
+                reading = o.outcome.reading
+                published = Published(reading.value, reading.as_of, o.fetched_at, o.source)
+        valid = [o for o in history if isinstance(o.outcome, Accepted | Suspect)]
+        newest = valid[-1] if valid else None
         return Latest(
             published=published,
-            pending=bool(valid) and isinstance(valid[-1].outcome, Suspect),
+            suspect_at=newest.fetched_at
+            if newest is not None and isinstance(newest.outcome, Suspect)
+            else None,
             last_attempt_at=history[-1].fetched_at if history else None,
         )
 

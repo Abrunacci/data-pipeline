@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Literal, Protocol
 
 from data_pipeline.core.readings import Reading
@@ -28,6 +29,10 @@ class MalformedResponseError(Exception):
     """The response does not have the shape the source expects: HTML, an error, a new format."""
 
 
+class NoQuoteError(Exception):
+    """The response is well formed but gives no usable value, e.g. too few offers to price."""
+
+
 class Source(Protocol):
     @property
     def name(self) -> str:
@@ -36,6 +41,8 @@ class Source(Protocol):
 
     def request(self) -> Request: ...
 
-    def parse(self, body: bytes) -> Reading:
-        """Read the value from a response body, or raise ``MalformedResponseError``."""
+    def parse(self, body: bytes, fetched_at: datetime) -> Reading:
+        """Read the value from a response body, or raise ``MalformedResponseError`` or
+        ``NoQuoteError``. ``fetched_at`` is when the body arrived: the reading's time when the
+        source does not say."""
         ...

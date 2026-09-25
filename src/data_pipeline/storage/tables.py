@@ -1,5 +1,6 @@
 """The database schema. Alembic migrations in ``migrations/`` create it, and
-``tests/integration/test_migrations.py`` checks that both match."""
+``test_the_migrations_build_the_schema_in_tables_py`` (tests/integration) checks that both
+match."""
 
 from __future__ import annotations
 
@@ -24,6 +25,8 @@ class Status(StrEnum):
     # An accepted reading that ended a run of suspects.
     CONFIRMED = "confirmed"
     SUSPECT = "suspect"
+    # A reading of the series' control source: recorded, never published.
+    CONTROL = "control"
     REJECTED = "rejected"
 
 

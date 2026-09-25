@@ -91,7 +91,9 @@ def create_app(settings: Settings) -> FastAPI:
             async with asyncio.timeout(HEALTH_TIMEOUT_SECONDS), engine.connect() as connection:
                 await connection.execute(select(observations.c.id).limit(1))
         except (SQLAlchemyError, OSError, TimeoutError) as error:
-            logger.exception("health check failed: %s", error)
+            # An expected failure while the database is down: one line, no traceback, so a probe
+            # every few seconds does not flood the log.
+            logger.error("health check failed: %s", error)
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return Health(status="database_unavailable")
         return Health(status="ok")
@@ -100,7 +102,7 @@ def create_app(settings: Settings) -> FastAPI:
     async def latest(store: Annotated[Store, Depends(_store)]) -> LatestRates:
         now = datetime.now(UTC)
         return LatestRates(
-            rates={s.id: latest_rate(await store.latest(s.id), s.rules, now) for s in series}
+            rates={s.id: latest_rate(await store.latest(s.id), s, now) for s in series}
         )
 
     return app

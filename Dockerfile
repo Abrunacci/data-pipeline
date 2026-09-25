@@ -9,6 +9,7 @@ RUN uv sync --locked --no-dev --no-install-project
 COPY README.md ./
 COPY src ./src
 COPY config ./config
+COPY data ./data
 COPY migrations ./migrations
 RUN uv sync --locked --no-dev --no-editable
 
@@ -18,6 +19,7 @@ RUN useradd --system --uid 10005 --no-create-home app
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 COPY --from=build /app/config /app/config
+COPY --from=build /app/data /app/data
 COPY alembic.ini /app/alembic.ini
 COPY --from=build /app/migrations /app/migrations
 # SERIES_FILE is required here: the installed package cannot find config/ relative to itself.
