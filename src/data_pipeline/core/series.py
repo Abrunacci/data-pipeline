@@ -24,6 +24,7 @@ class Series:
     - ``hours``: the series only runs, and its values only age, while they are open. None is
       always open.
     - ``official_source``: False when the source is not a documented, official one.
+    - ``history``: the history source its past values are loaded from, once.
     - ``indicative``: the value is a reference price, not the one a trade gets. ``gap`` is how
       much less a trade got, from observed pairs, when there are any.
     """
@@ -38,6 +39,7 @@ class Series:
     official_source: bool = True
     indicative: bool = False
     gap: Gap | None = None
+    history: str | None = None
 
     def __post_init__(self) -> None:
         if not self.sources:

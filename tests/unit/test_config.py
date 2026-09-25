@@ -14,7 +14,7 @@ from data_pipeline.config import (
     load_series,
 )
 from data_pipeline.core.series import Series
-from data_pipeline.sources import available_sources
+from data_pipeline.sources import available_history_sources, available_sources
 
 VALID = """
 series:
@@ -32,11 +32,14 @@ series:
 def load(tmp_path: Path, text: str) -> tuple[Series, ...]:
     path = tmp_path / "series.yaml"
     path.write_text(text)
-    return load_series(path, available_sources())
+    return load_series(path, available_sources(), available_history_sources())
 
 
 def test_the_repo_series_file_loads() -> None:
-    series = {s.id: s for s in load_series(DEFAULT_SERIES_FILE, available_sources())}
+    series = {
+        s.id: s
+        for s in load_series(DEFAULT_SERIES_FILE, available_sources(), available_history_sources())
+    }
     assert list(series) == ["mep", "p2p_usdt_usd", "bitso_usdt_ars", "arq_usd_ars"]
     mep = series["mep"]
     assert mep.control == "ambito_mep"

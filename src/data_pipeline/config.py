@@ -26,7 +26,7 @@ from data_pipeline.core.checks import Range, Rules
 from data_pipeline.core.gap import GapSample, summarize
 from data_pipeline.core.schedule import OpeningHours
 from data_pipeline.core.series import Series
-from data_pipeline.core.sources import Source
+from data_pipeline.core.sources import HistorySource, Source
 
 DEFAULT_SERIES_FILE = Path(__file__).resolve().parents[2] / "config" / "series.yaml"
 
@@ -100,6 +100,7 @@ class _Series(_Strict):
     control_within_percent: _Positive = Decimal("1.5")
     official_source: Annotated[bool, Field(strict=True)] = True
     indicative: Annotated[bool, Field(strict=True)] = False
+    history: str | None = None
     # CSV of observed list/final pairs (see data/binance_card_quotes.csv), relative to the
     # series file. Only for an indicative series.
     gap_samples: str | None = None
@@ -109,12 +110,16 @@ class _File(_Strict):
     series: tuple[_Series, ...]
 
 
-def load_series(path: Path, sources: Mapping[str, Source]) -> tuple[Series, ...]:
+def load_series(
+    path: Path,
+    sources: Mapping[str, Source],
+    histories: Mapping[str, HistorySource],
+) -> tuple[Series, ...]:
     """Read and check the series file. Every problem is a ``ConfigError`` naming the file."""
     try:
         raw = yaml.load(path.read_text(encoding="utf-8"), Loader=_DecimalLoader)
         parsed = _File.model_validate(raw)
-        series = tuple(_build(entry, sources, path.parent) for entry in parsed.series)
+        series = tuple(_build(entry, sources, histories, path.parent) for entry in parsed.series)
     except (OSError, yaml.YAMLError, ValidationError, ValueError, GapSamplesError) as error:
         raise ConfigError(f"{path}: {error}") from error
     ids = [s.id for s in series]
@@ -123,10 +128,17 @@ def load_series(path: Path, sources: Mapping[str, Source]) -> tuple[Series, ...]
     return series
 
 
-def _build(entry: _Series, sources: Mapping[str, Source], directory: Path) -> Series:
+def _build(
+    entry: _Series,
+    sources: Mapping[str, Source],
+    histories: Mapping[str, HistorySource],
+    directory: Path,
+) -> Series:
     named = [*entry.sources, *([] if entry.control is None else [entry.control])]
     if unknown := [name for name in named if name not in sources]:
         raise ValueError(f"series {entry.id}: unknown sources {unknown}")
+    if entry.history is not None and entry.history not in histories:
+        raise ValueError(f"series {entry.id}: unknown history source {entry.history!r}")
     if entry.gap_samples is not None and not entry.indicative:
         raise ValueError(f"series {entry.id}: gap_samples is only for an indicative series")
     hundred = Decimal(100)
@@ -147,6 +159,7 @@ def _build(entry: _Series, sources: Mapping[str, Source], directory: Path) -> Se
             control_within=entry.control_within_percent / hundred,
         ),
         official_source=entry.official_source,
+        history=entry.history,
         indicative=entry.indicative,
         gap=None
         if entry.gap_samples is None
