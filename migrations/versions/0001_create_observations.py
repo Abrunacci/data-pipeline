@@ -4,6 +4,7 @@ Revision ID: 0001
 Revises: none
 """
 
+import os
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -40,19 +41,22 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "observations_series_fetched",
-        "observations",
-        ["series_id", sa.literal_column("fetched_at DESC")],
+        "observations_series_id", "observations", ["series_id", sa.literal_column("id DESC")]
     )
     op.create_index(
         "observations_series_published",
         "observations",
-        ["series_id", sa.literal_column("fetched_at DESC")],
+        ["series_id", sa.literal_column("id DESC")],
         postgresql_where=sa.text("status IN ('accepted', 'confirmed')"),
     )
+    # The app only reads and appends: the database enforces that nothing is updated or deleted.
+    if app_user := os.environ.get("APP_DB_USER"):
+        role = op.get_bind().dialect.identifier_preparer.quote(app_user)
+        op.execute(f"GRANT SELECT, INSERT ON observations TO {role}")
+        op.execute(f"GRANT USAGE ON SEQUENCE observations_id_seq TO {role}")
 
 
 def downgrade() -> None:
     op.drop_index("observations_series_published", table_name="observations")
-    op.drop_index("observations_series_fetched", table_name="observations")
+    op.drop_index("observations_series_id", table_name="observations")
     op.drop_table("observations")

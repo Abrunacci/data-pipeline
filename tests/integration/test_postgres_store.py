@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import httpx
 import pytest
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine
+from alembic.autogenerate import compare_metadata
+from alembic.migration import MigrationContext
+from sqlalchemy import create_engine, update
+from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.pool import NullPool
 
+from data_pipeline.core.checks import Range, Rules
 from data_pipeline.core.readings import (
     Accepted,
     Observation,
@@ -16,8 +23,13 @@ from data_pipeline.core.readings import (
     Rejection,
     Suspect,
 )
+from data_pipeline.core.series import Series
+from data_pipeline.runner.collect import collect
+from data_pipeline.runner.scheduler import run_slot
+from data_pipeline.sources.bitso import BitsoBid
 from data_pipeline.storage.postgres import PostgresStore
-from data_pipeline.storage.tables import observations
+from data_pipeline.storage.tables import metadata, observations
+from tests.integration.conftest import Urls
 
 pytestmark = pytest.mark.anyio
 
@@ -32,8 +44,7 @@ def reading(value: str, minutes: int = 0) -> Reading:
     return Reading(Decimal(value), T0 + timedelta(minutes=minutes))
 
 
-async def test_an_empty_series_has_nothing_published(engine: AsyncEngine) -> None:
-    store = PostgresStore(engine)
+async def test_an_empty_series_has_nothing_published(store: PostgresStore) -> None:
     latest = await store.latest("rate")
     assert latest.published is None
     assert not latest.pending
@@ -43,8 +54,7 @@ async def test_an_empty_series_has_nothing_published(engine: AsyncEngine) -> Non
     assert list(state.suspects) == []
 
 
-async def test_the_last_accepted_value_is_published_exactly(engine: AsyncEngine) -> None:
-    store = PostgresStore(engine)
+async def test_the_last_accepted_value_is_published_exactly(store: PostgresStore) -> None:
     await store.record(at(0, Accepted(reading("1600.12345678", 0))))
     await store.record(at(10, Accepted(reading("1615.3", 9))))
     await store.record(at(20, Rejected(Rejection.FETCH_FAILED, "HTTP 503")))
@@ -59,8 +69,7 @@ async def test_the_last_accepted_value_is_published_exactly(engine: AsyncEngine)
     assert not latest.pending
 
 
-async def test_state_lists_the_suspects_since_the_last_accepted(engine: AsyncEngine) -> None:
-    store = PostgresStore(engine)
+async def test_state_lists_the_suspects_since_the_last_accepted(store: PostgresStore) -> None:
     await store.record(at(0, Suspect(reading("1500"))))
     await store.record(at(10, Accepted(reading("1600"))))
     await store.record(at(20, Suspect(reading("1800"))))
@@ -74,8 +83,22 @@ async def test_state_lists_the_suspects_since_the_last_accepted(engine: AsyncEng
     assert (await store.latest("rate")).pending
 
 
-async def test_a_confirmed_reading_is_published(engine: AsyncEngine) -> None:
-    store = PostgresStore(engine)
+async def test_order_is_the_order_of_recording_not_the_clock(store: PostgresStore) -> None:
+    # The server's clock was corrected backwards between the two runs.
+    await store.record(at(10, Accepted(reading("1600"))))
+    await store.record(at(5, Suspect(reading("1800"))))
+    await store.record(at(5, Accepted(reading("1700"))))
+
+    latest = await store.latest("rate")
+    assert latest.published is not None
+    assert latest.published.value == Decimal(1700)
+    assert latest.last_attempt_at == T0 + timedelta(minutes=5)
+    state = await store.state("rate")
+    assert state.last_accepted == Decimal(1700)
+    assert list(state.suspects) == []
+
+
+async def test_a_confirmed_reading_is_published(store: PostgresStore) -> None:
     await store.record(at(0, Accepted(reading("1600"))))
     await store.record(at(10, Suspect(reading("1800"))))
     await store.record(at(20, Accepted(reading("1801"), confirmed=True)))
@@ -87,8 +110,9 @@ async def test_a_confirmed_reading_is_published(engine: AsyncEngine) -> None:
     assert list((await store.state("rate")).suspects) == []
 
 
-async def test_a_rejected_reading_keeps_the_value_the_source_sent(engine: AsyncEngine) -> None:
-    store = PostgresStore(engine)
+async def test_a_rejected_reading_keeps_the_value_the_source_sent(
+    store: PostgresStore, engine: AsyncEngine
+) -> None:
     await store.record(at(0, Rejected(Rejection.IMPLAUSIBLE, "too low", reading("16.00"))))
     async with engine.connect() as connection:
         row = (await connection.execute(observations.select())).one()
@@ -97,24 +121,114 @@ async def test_a_rejected_reading_keeps_the_value_the_source_sent(engine: AsyncE
     assert row.reason == "implausible"
 
 
-async def test_attempted_since_counts_every_outcome(engine: AsyncEngine) -> None:
-    store = PostgresStore(engine)
+async def test_attempted_since_looks_at_the_last_attempt(store: PostgresStore) -> None:
     await store.record(at(10, Rejected(Rejection.FETCH_FAILED, "timeout")))
     assert await store.attempted_since("rate", T0 + timedelta(minutes=10))
     assert not await store.attempted_since("rate", T0 + timedelta(minutes=11))
     assert not await store.attempted_since("other", T0)
 
 
-async def test_only_one_runner_holds_a_series(engine: AsyncEngine) -> None:
-    first, second = PostgresStore(engine), PostgresStore(engine)
-    async with first.exclusive("rate") as alone:
+async def test_only_one_runner_holds_a_series(store: PostgresStore, urls: Urls) -> None:
+    other_process = PostgresStore(
+        create_async_engine(urls.app), create_async_engine(urls.app, poolclass=NullPool)
+    )
+    async with store.exclusive("rate") as alone:
         assert alone
-        async with second.exclusive("rate") as also:
+        async with other_process.exclusive("rate") as also:
             assert not also
-        async with second.exclusive("other") as other:
+        async with other_process.exclusive("other") as other:
             assert other
-    async with second.exclusive("rate") as after:
+    async with other_process.exclusive("rate") as after:
         assert after
+
+
+async def test_locks_do_not_starve_the_query_pool(urls: Urls, engine: AsyncEngine) -> None:
+    # A pool of one connection, and more series than that running in the same slot.
+    small = create_async_engine(urls.app, pool_size=1, max_overflow=0, pool_timeout=2)
+    lock_engine = create_async_engine(urls.app, poolclass=NullPool)
+    store = PostgresStore(small, lock_engine)
+    rules = Rules(
+        Range(Decimal(500), Decimal(50_000)),
+        timedelta(minutes=30),
+        Decimal("0.05"),
+        Decimal("0.005"),
+    )
+    source = BitsoBid("usdt_ars")
+    series = [
+        Series(f"rate_{n}", "test", (source.name,), timedelta(minutes=10), rules) for n in range(4)
+    ]
+
+    async def slow_bitso(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.2)  # every run holds its lock while the others query
+        body = (
+            '{"success": true, "payload": {"book": "usdt_ars", "bid": "1615.3",'
+            f' "created_at": "{datetime.now(UTC).isoformat()}"}}}}'
+        )
+        return httpx.Response(200, content=body.encode())
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(slow_bitso))
+    ran = await asyncio.gather(
+        *(
+            run_slot(s, {source.name: source}, client, store, lambda: datetime.now(UTC))
+            for s in series
+        )
+    )
+    assert ran == [True] * 4
+    for s in series:
+        assert (await store.latest(s.id)).published is not None
+    await small.dispose()
+    await lock_engine.dispose()
+
+
+async def test_a_jump_is_confirmed_through_the_real_store(store: PostgresStore) -> None:
+    rules = Rules(
+        Range(Decimal(500), Decimal(50_000)),
+        timedelta(minutes=30),
+        Decimal("0.05"),
+        Decimal("0.005"),
+    )
+    source = BitsoBid("usdt_ars")
+    series = Series("rate", "test", (source.name,), timedelta(minutes=10), rules)
+    bids = iter(["1600", "1800", "1805", "1801"])
+    moments = iter(T0 + timedelta(minutes=10 * n) for n in range(8))
+    now = T0
+
+    def clock() -> datetime:
+        return now
+
+    def bitso(request: httpx.Request) -> httpx.Response:
+        body = (
+            '{"success": true, "payload": {"book": "usdt_ars",'
+            f' "bid": "{next(bids)}", "created_at": "{now.isoformat()}"}}}}'
+        )
+        return httpx.Response(200, content=body.encode())
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(bitso))
+    outcomes = []
+    for _ in range(4):
+        now = next(moments)
+        [observation] = await collect(series, {source.name: source}, client, store, clock)
+        outcomes.append(type(observation.outcome).__name__)
+        published = (await store.latest("rate")).published
+        assert published is not None
+        if len(outcomes) < 4:
+            assert published.value == Decimal(1600)
+
+    assert outcomes == ["Accepted", "Suspect", "Suspect", "Accepted"]
+    latest = await store.latest("rate")
+    assert latest.published is not None
+    assert latest.published.value == Decimal(1801)
+    assert not latest.pending
+
+
+async def test_the_app_role_can_only_read_and_append(
+    store: PostgresStore, engine: AsyncEngine
+) -> None:
+    await store.record(at(0, Accepted(reading("1600"))))
+    for statement in (update(observations).values(value=1), observations.delete()):
+        with pytest.raises(ProgrammingError, match="permission denied"):
+            async with engine.begin() as connection:
+                await connection.execute(statement)
 
 
 async def test_the_schema_refuses_an_accepted_row_without_a_value(engine: AsyncEngine) -> None:
@@ -125,3 +239,11 @@ async def test_the_schema_refuses_an_accepted_row_without_a_value(engine: AsyncE
                     series_id="rate", source="s", fetched_at=T0, status="accepted"
                 )
             )
+
+
+def test_the_migrations_build_the_schema_in_tables_py(urls: Urls) -> None:
+    sync = create_engine(urls.owner)
+    with sync.connect() as connection:
+        differences = compare_metadata(MigrationContext.configure(connection), metadata)
+    sync.dispose()
+    assert differences == []
