@@ -7,11 +7,11 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager, suppress
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated
 
 import httpx
-from fastapi import Depends, FastAPI, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -20,13 +20,21 @@ from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from data_pipeline.api.schemas import Health, LatestRates, latest_rate
+from data_pipeline.api.schemas import (
+    HISTORY_ZONE,
+    Health,
+    History,
+    LatestRates,
+    day_value,
+    history_range,
+    latest_rate,
+)
 from data_pipeline.config import Settings, load_series
 from data_pipeline.core.series import Series
-from data_pipeline.core.sources import Source
-from data_pipeline.runner.scheduler import run_forever
+from data_pipeline.core.sources import HistorySource, Source
+from data_pipeline.runner.scheduler import run_series
 from data_pipeline.runner.store import Store
-from data_pipeline.sources import available_sources
+from data_pipeline.sources import available_history_sources, available_sources
 from data_pipeline.storage.postgres import PostgresStore
 from data_pipeline.storage.tables import observations
 
@@ -41,7 +49,9 @@ HEALTH_TIMEOUT_SECONDS = 3
 
 def create_app(settings: Settings) -> FastAPI:
     sources = available_sources()
-    series = load_series(settings.series_file, sources)
+    histories = available_history_sources()
+    series = load_series(settings.series_file, sources, histories)
+    by_id = {s.id: s for s in series}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -54,7 +64,9 @@ def create_app(settings: Settings) -> FastAPI:
         ) as client:
             app.state.engine = engine
             app.state.store = store
-            tasks = _start(series, sources, client, store) if settings.run_scheduler else []
+            tasks = (
+                _start(series, sources, histories, client, store) if settings.run_scheduler else []
+            )
             try:
                 yield
             finally:
@@ -105,17 +117,45 @@ def create_app(settings: Settings) -> FastAPI:
             rates={s.id: latest_rate(await store.latest(s.id), s, now) for s in series}
         )
 
+    @app.get(
+        "/v1/rates/{series_id}/history",
+        responses={
+            404: {"description": "No such series."},
+            422: {"description": "A bad date range."},
+            503: {"description": "The database is down."},
+        },
+    )
+    async def history(
+        series_id: str,
+        store: Annotated[Store, Depends(_store)],
+        first: Annotated[date | None, Query(alias="from")] = None,
+        last: Annotated[date | None, Query(alias="to")] = None,
+    ) -> History:
+        """One value a day, the last published that day, with days in Buenos Aires time. By
+        default the last 30 days; at most 400 days per request."""
+        if series_id not in by_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown_series")
+        days = history_range(first, last, datetime.now(HISTORY_ZONE).date())
+        found = await store.daily(series_id, days.first, days.last, HISTORY_ZONE)
+        return History(
+            series=series_id,
+            first=days.first,
+            last=days.last,
+            days=[day_value(day) for day in found],
+        )
+
     return app
 
 
 def _start(
     series: tuple[Series, ...],
     sources: Mapping[str, Source],
+    histories: Mapping[str, HistorySource],
     client: httpx.AsyncClient,
     store: Store,
 ) -> list[asyncio.Task[None]]:
     return [
-        asyncio.create_task(run_forever(s, sources, client, store), name=f"series:{s.id}")
+        asyncio.create_task(run_series(s, sources, histories, client, store), name=f"series:{s.id}")
         for s in series
     ]
 

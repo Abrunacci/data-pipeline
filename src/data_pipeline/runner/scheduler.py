@@ -15,7 +15,8 @@ from datetime import UTC, datetime, timedelta
 import httpx
 
 from data_pipeline.core.series import Series
-from data_pipeline.core.sources import Source
+from data_pipeline.core.sources import HistorySource, Source
+from data_pipeline.runner.backfill import backfill
 from data_pipeline.runner.collect import Clock, collect
 from data_pipeline.runner.store import Store
 
@@ -73,3 +74,22 @@ async def run_forever(
             logger.exception("run of %s failed", series.id)
         next_slot = slot_start(now(), series.every) + series.every
         await sleep((next_slot - now()).total_seconds())
+
+
+async def run_series(
+    series: Series,
+    sources: Mapping[str, Source],
+    histories: Mapping[str, HistorySource],
+    client: httpx.AsyncClient,
+    store: Store,
+    now: Clock = lambda: datetime.now(UTC),
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    """Load the series' past values if it has a history source and they are not loaded yet,
+    then run it forever. A failed load never stops the schedule; the next start retries it."""
+    if series.history is not None:
+        try:
+            await backfill(series, histories[series.history], client, store, now)
+        except Exception:
+            logger.exception("loading past values of %s failed", series.id)
+    await run_forever(series, sources, client, store, now, sleep)

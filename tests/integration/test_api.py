@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import httpx
@@ -13,6 +13,7 @@ from data_pipeline.api.app import HEALTH_TIMEOUT_SECONDS, create_app
 from data_pipeline.config import Settings
 from data_pipeline.core.readings import (
     Accepted,
+    HeldBack,
     Observation,
     Reading,
     Rejected,
@@ -99,7 +100,9 @@ async def test_an_old_rate_is_stale_and_a_suspect_is_pending(
     old = Reading(Decimal(1600), now - timedelta(minutes=31))
     await store.record(Observation("bitso_usdt_ars", "s", old.as_of, Accepted(old)))
     jump = Reading(Decimal(1800), now)
-    await store.record(Observation("bitso_usdt_ars", "s", now, Suspect(jump, "jumped")))
+    await store.record(
+        Observation("bitso_usdt_ars", "s", now, Suspect(jump, HeldBack.JUMP, "jumped"))
+    )
 
     rate = (await client.get("/v1/rates/latest")).json()["rates"]["bitso_usdt_ars"]
     assert rate["value"] == "1600"
@@ -116,7 +119,12 @@ async def test_an_expired_suspect_is_no_longer_pending(
     await store.record(Observation("bitso_usdt_ars", "s", value.as_of, Accepted(value)))
     old = now - timedelta(minutes=31)
     await store.record(
-        Observation("bitso_usdt_ars", "s", old, Suspect(Reading(Decimal(1800), old), "jumped"))
+        Observation(
+            "bitso_usdt_ars",
+            "s",
+            old,
+            Suspect(Reading(Decimal(1800), old), HeldBack.JUMP, "jumped"),
+        )
     )
     rate = (await client.get("/v1/rates/latest")).json()["rates"]["bitso_usdt_ars"]
     assert rate["pending_confirmation"] is False
@@ -190,3 +198,52 @@ async def test_a_database_error_that_is_not_an_outage_is_a_500(urls: Urls) -> No
     ):
         response = await http.get("/v1/rates/latest")
     assert response.status_code == 500
+
+
+async def test_history_gives_one_value_a_day(
+    client: httpx.AsyncClient, store: PostgresStore
+) -> None:
+    yesterday = datetime(2026, 9, 24, 20, 0, tzinfo=UTC)  # 17:00 in Buenos Aires
+    await store.record_history(
+        "mep",
+        "argentinadatos_bolsa_compra_daily",
+        yesterday,
+        [Reading(Decimal("1537.6"), yesterday)],
+    )
+    today = datetime(2026, 9, 25, 18, 0, tzinfo=UTC)
+    await store.record(
+        Observation("mep", "dolarapi_mep_compra", today, Accepted(Reading(Decimal(1539), today)))
+    )
+    response = await client.get("/v1/rates/mep/history?from=2026-09-24&to=2026-09-25")
+    assert response.status_code == 200
+    assert response.json() == {
+        "series": "mep",
+        "first": "2026-09-24",
+        "last": "2026-09-25",
+        "days": [
+            {
+                "date": "2026-09-24",
+                "value": "1537.6",
+                "as_of": "2026-09-24T20:00:00Z",
+                "source": "argentinadatos_bolsa_compra_daily",
+            },
+            {
+                "date": "2026-09-25",
+                "value": "1539",
+                "as_of": "2026-09-25T18:00:00Z",
+                "source": "dolarapi_mep_compra",
+            },
+        ],
+    }
+
+
+async def test_history_refuses_unknown_series_and_bad_ranges(client: httpx.AsyncClient) -> None:
+    assert (await client.get("/v1/rates/nope/history")).status_code == 404
+    assert (await client.get("/v1/rates/mep/history?from=2026-09-25&to=2026-09-24")).json() == {
+        "detail": "from_after_to"
+    }
+    too_long = await client.get("/v1/rates/mep/history?from=2025-01-01&to=2026-09-25")
+    assert too_long.status_code == 422
+    assert (await client.get("/v1/rates/mep/history?from=yesterday")).status_code == 422
+    default = (await client.get("/v1/rates/mep/history")).json()
+    assert (date.fromisoformat(default["last"]) - date.fromisoformat(default["first"])).days == 29

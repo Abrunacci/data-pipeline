@@ -36,7 +36,8 @@ The series ids are the ones the calculator uses. A Binance card-purchase price i
    value stays published, marked `pending_confirmation`, until the value confirms itself:
    - a jump, at once if the control agrees, or when the next two readings jumped the same
      way (the market moved, even if it keeps moving);
-   - a disagreement, when the next two readings stay within 5 % of it (the value persists).
+   - a disagreement, when the next two readings also disagree with the control and stay
+     within the series' jump limit of it (the value persists).
 
    A real move shows within two more runs; a one-off glitch never does. Held-back values
    expire after three intervals, so an old one cannot confirm a new jump after an outage.
@@ -110,8 +111,35 @@ What Airflow would give is built in:
 - `indicative`: a reference price, not what a trade gets; `final_price_gap` (`percent`,
   `samples`, `first`, `last`) says how much less a trade got, when there are observations.
 
-`GET /health` returns 200 when the app can read its table, and 503 when it cannot. Both
-endpoints answer 503 when the database is down.
+`GET /v1/rates/{id}/history?from=2026-09-24&to=2026-09-25`
+
+```json
+{
+  "series": "mep",
+  "first": "2026-09-24",
+  "last": "2026-09-25",
+  "days": [
+    {"date": "2026-09-24", "value": "1537.6", "as_of": "2026-09-24T20:00:00Z",
+     "source": "argentinadatos_bolsa_compra_daily"},
+    {"date": "2026-09-25", "value": "1539", "as_of": "2026-09-25T18:00:00Z",
+     "source": "dolarapi_mep_compra"}
+  ]
+}
+```
+
+- One value a day, the one with the latest `as_of` that day (days in Buenos Aires time), only
+  for the days that have one.
+- `from` and `to` are optional: by default, the last 30 days; `first` and `last` repeat the
+  range. At most 400 days per request, between 2000-01-01 and tomorrow. Otherwise a 422 with
+  `detail` `range_too_long`, `from_after_to` or `date_out_of_range` (a date that is not a date
+  gets FastAPI's usual 422). An unknown series is a 404.
+- The MEP's past closes, since 2018, are loaded once from
+  [ArgentinaDatos](https://argentinadatos.com) the first time the app starts: the buy side,
+  as of 17:00, on weekdays, up to yesterday. `source` tells them apart from the values the
+  pipeline read itself.
+
+`GET /health` returns 200 when the app can read its table, and 503 when it cannot. Every
+endpoint answers 503 when the database is down.
 
 ## Running it
 

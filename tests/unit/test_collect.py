@@ -237,7 +237,7 @@ class TestControl:
         answers = http({"primary": [ok("1600")], "control": [ok("x")]})
         observations = await collect(CONTROLLED, sources, answers, store, lambda: NOW)
         assert [o.outcome for o in observations] == [
-            Rejected(Rejection.MALFORMED, "OverflowError: a bug"),
+            Rejected(Rejection.SOURCE_BUG, "parse its answer: OverflowError: a bug"),
             Accepted(Reading(Decimal(1600), NOW)),
         ]
 
@@ -322,3 +322,40 @@ async def test_a_bug_outside_the_parser_stops_the_run() -> None:
     await client.aclose()
     with pytest.raises(RuntimeError):
         await collect(SERIES, SOURCES, client, MemoryStore(), lambda: NOW)
+
+
+async def test_a_source_that_cannot_build_its_request_is_a_source_bug() -> None:
+    @dataclass(frozen=True)
+    class NoRequest:
+        name: str = "control"
+
+        def request(self) -> Request:
+            raise KeyError("missing setting")
+
+        def parse(self, body: bytes, fetched_at: datetime) -> Reading:
+            raise AssertionError("never called")
+
+    sources: dict[str, Source] = {**SOURCES, "control": NoRequest()}
+    observations = await collect(
+        CONTROLLED, sources, http({"primary": [ok("1600")]}), MemoryStore(), lambda: NOW
+    )
+    assert [o.outcome for o in observations] == [
+        Rejected(Rejection.SOURCE_BUG, "build its request: KeyError: 'missing setting'"),
+        Accepted(Reading(Decimal(1600), NOW)),
+    ]
+
+
+async def test_a_failed_fetch_is_stamped_when_it_gave_up() -> None:
+    # Each fetch takes a minute: the stamp must be taken after it, not before.
+    clock = [NOW]
+
+    def slow_404(request: httpx.Request) -> httpx.Response:
+        clock[0] += timedelta(minutes=1)
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(slow_404))
+    observations = await collect(SERIES, SOURCES, client, MemoryStore(), lambda: clock[0])
+    assert [o.fetched_at for o in observations] == [
+        NOW + timedelta(minutes=1),
+        NOW + timedelta(minutes=2),
+    ]

@@ -13,6 +13,8 @@ series:
     sources: [dolarapi_mep_compra]
     # Ámbito publishes a single MEP price, between DolarApi's compra and venta.
     control: ambito_mep
+    # Daily closes since 2018, loaded once.
+    history: argentinadatos_bolsa_compra_daily
     every_minutes: 15
     # Weekdays, from before the market opens (11:00) to after the MEP settles, in Buenos Aires.
     # Holidays are not known: on one, the value shows as stale.

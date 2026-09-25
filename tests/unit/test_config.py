@@ -14,7 +14,7 @@ from data_pipeline.config import (
     load_series,
 )
 from data_pipeline.core.series import Series
-from data_pipeline.sources import available_sources
+from data_pipeline.sources import available_history_sources, available_sources
 
 VALID = """
 series:
@@ -32,11 +32,14 @@ series:
 def load(tmp_path: Path, text: str) -> tuple[Series, ...]:
     path = tmp_path / "series.yaml"
     path.write_text(text)
-    return load_series(path, available_sources())
+    return load_series(path, available_sources(), available_history_sources())
 
 
 def test_the_repo_series_file_loads() -> None:
-    series = {s.id: s for s in load_series(DEFAULT_SERIES_FILE, available_sources())}
+    series = {
+        s.id: s
+        for s in load_series(DEFAULT_SERIES_FILE, available_sources(), available_history_sources())
+    }
     assert list(series) == ["mep", "p2p_usdt_usd", "bitso_usdt_ars", "arq_usd_ars"]
     mep = series["mep"]
     assert mep.control == "ambito_mep"
@@ -89,6 +92,15 @@ def test_opening_hours_mistakes_are_config_errors(
 ) -> None:
     with pytest.raises(ConfigError, match=message):
         load(tmp_path, VALID + HOURS.replace(*change))
+
+
+def test_a_history_source_must_be_known_and_need_opening_hours(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="unknown history source 'nope'"):
+        load(tmp_path, VALID + HOURS + "\n    history: nope")
+    with pytest.raises(ConfigError, match="needs opening hours"):
+        load(tmp_path, VALID + "\n    history: argentinadatos_bolsa_compra_daily")
+    (series,) = load(tmp_path, VALID + HOURS + "\n    history: argentinadatos_bolsa_compra_daily")
+    assert series.history == "argentinadatos_bolsa_compra_daily"
 
 
 def test_a_control_must_be_a_known_source_other_than_the_primary(tmp_path: Path) -> None:

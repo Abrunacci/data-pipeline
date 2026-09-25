@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import time
 from decimal import Decimal
 
-from data_pipeline.core.sources import Source
-from data_pipeline.sources.ambito import AmbitoMep
+from data_pipeline.core.sources import HistorySource, Source
+from data_pipeline.sources.ambito import BUENOS_AIRES, AmbitoMep
+from data_pipeline.sources.argentinadatos import ArgentinaDatosDaily
 from data_pipeline.sources.arq import ArqBid
 from data_pipeline.sources.binance_card import BinanceCardPrice
 from data_pipeline.sources.binance_p2p import BinanceP2PMedian
 from data_pipeline.sources.bitso import BitsoBid
 from data_pipeline.sources.criptoya import CriptoYaBid
 from data_pipeline.sources.dolarapi import DolarApiMep
+
+
+def available_history_sources() -> Mapping[str, HistorySource]:
+    sources: list[HistorySource] = [
+        # The MEP buy side, as of the close of trading (17:00 in Buenos Aires).
+        ArgentinaDatosDaily("bolsa", "compra", time(17, 0), BUENOS_AIRES),
+    ]
+    return {source.name: source for source in sources}
 
 
 def available_sources() -> Mapping[str, Source]:

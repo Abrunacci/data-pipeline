@@ -33,6 +33,19 @@ class NoQuoteError(Exception):
     """The response is well formed but gives no usable value, e.g. too few offers to price."""
 
 
+class HistorySource(Protocol):
+    """Where a series' past values come from, read once. Like a ``Source``, it does no I/O."""
+
+    @property
+    def name(self) -> str: ...
+
+    def request(self) -> Request: ...
+
+    def parse(self, body: bytes, fetched_at: datetime) -> list[Reading]:
+        """Every past value in the answer, oldest first, or ``MalformedResponseError``."""
+        ...
+
+
 class Source(Protocol):
     @property
     def name(self) -> str:

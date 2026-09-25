@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -15,6 +16,8 @@ from data_pipeline.core.checks import Range, Rules
 from data_pipeline.core.readings import (
     Accepted,
     Control,
+    Held,
+    HeldBack,
     Observation,
     Outcome,
     Reading,
@@ -52,7 +55,7 @@ async def test_an_empty_series_has_nothing_published(store: PostgresStore) -> No
     assert latest.last_attempt_at is None
     state = await store.state("rate", SINCE)
     assert state.last_accepted is None
-    assert list(state.suspects) == []
+    assert [held.value for held in state.suspects] == []
 
 
 async def test_the_last_accepted_value_is_published_exactly(store: PostgresStore) -> None:
@@ -71,26 +74,26 @@ async def test_the_last_accepted_value_is_published_exactly(store: PostgresStore
 
 
 async def test_state_lists_the_suspects_since_the_last_accepted(store: PostgresStore) -> None:
-    await store.record(at(0, Suspect(reading("1500"), "held back")))
+    await store.record(at(0, Suspect(reading("1500"), HeldBack.JUMP, "held back")))
     await store.record(at(10, Accepted(reading("1600"))))
-    await store.record(at(20, Suspect(reading("1800"), "held back")))
+    await store.record(at(20, Suspect(reading("1800"), HeldBack.JUMP, "held back")))
     await store.record(at(30, Rejected(Rejection.MALFORMED, "html")))
-    await store.record(at(40, Suspect(reading("1801"), "held back")))
+    await store.record(at(40, Suspect(reading("1801"), HeldBack.JUMP, "held back")))
     await store.record(at(50, Accepted(reading("9999"), confirmed=True), series_id="other"))
 
     state = await store.state("rate", SINCE)
     assert state.last_accepted == Decimal(1600)
-    assert list(state.suspects) == [Decimal(1800), Decimal(1801)]
+    assert [held.value for held in state.suspects] == [Decimal(1800), Decimal(1801)]
     assert (await store.latest("rate")).suspect_at == T0 + timedelta(minutes=40)
 
 
 async def test_order_is_the_order_of_recording_not_the_clock(store: PostgresStore) -> None:
     # The server's clock was corrected backwards between the runs.
     await store.record(at(10, Accepted(reading("1600"))))
-    await store.record(at(5, Suspect(reading("1800"), "held back")))
+    await store.record(at(5, Suspect(reading("1800"), HeldBack.JUMP, "held back")))
     state = await store.state("rate", SINCE)
     assert state.last_accepted == Decimal(1600)
-    assert list(state.suspects) == [Decimal(1800)]
+    assert [held.value for held in state.suspects] == [Decimal(1800)]
     await store.record(at(5, Accepted(reading("1700"))))
 
     latest = await store.latest("rate")
@@ -99,19 +102,19 @@ async def test_order_is_the_order_of_recording_not_the_clock(store: PostgresStor
     assert latest.last_attempt_at == T0 + timedelta(minutes=5)
     state = await store.state("rate", SINCE)
     assert state.last_accepted == Decimal(1700)
-    assert list(state.suspects) == []
+    assert [held.value for held in state.suspects] == []
 
 
 async def test_a_confirmed_reading_is_published(store: PostgresStore) -> None:
     await store.record(at(0, Accepted(reading("1600"))))
-    await store.record(at(10, Suspect(reading("1800"), "held back")))
+    await store.record(at(10, Suspect(reading("1800"), HeldBack.JUMP, "held back")))
     await store.record(at(20, Accepted(reading("1801"), confirmed=True)))
 
     latest = await store.latest("rate")
     assert latest.published is not None
     assert latest.published.value == Decimal(1801)
     assert latest.suspect_at is None
-    assert list((await store.state("rate", SINCE)).suspects) == []
+    assert [held.value for held in (await store.state("rate", SINCE)).suspects] == []
 
 
 async def test_a_rejected_reading_keeps_the_value_the_source_sent(
@@ -125,33 +128,57 @@ async def test_a_rejected_reading_keeps_the_value_the_source_sent(
     assert row.reason == "implausible"
 
 
+async def test_why_a_suspect_was_held_is_kept(store: PostgresStore, urls: Urls) -> None:
+    await store.record(at(0, Accepted(reading("1600"))))
+    await store.record(at(10, Suspect(reading("1650"), HeldBack.DISAGREEMENT, "control")))
+    # One written by the release before, without a reason.
+    owner = create_async_engine(urls.owner)
+    async with owner.begin() as connection:
+        await connection.execute(
+            observations.insert().values(
+                series_id="rate",
+                source="s",
+                fetched_at=T0 + timedelta(minutes=20),
+                status="suspect",
+                value=Decimal(1655),
+                as_of=T0 + timedelta(minutes=20),
+            )
+        )
+    await owner.dispose()
+    state = await store.state("rate", SINCE)
+    assert list(state.suspects) == [
+        Held(Decimal(1650), HeldBack.DISAGREEMENT),
+        Held(Decimal(1655), None),
+    ]
+
+
 async def test_expired_suspects_are_left_out(store: PostgresStore) -> None:
     await store.record(at(0, Accepted(reading("1600"))))
-    await store.record(at(10, Suspect(reading("1800"), "held back")))
-    await store.record(at(20, Suspect(reading("1810"), "held back")))
+    await store.record(at(10, Suspect(reading("1800"), HeldBack.JUMP, "held back")))
+    await store.record(at(20, Suspect(reading("1810"), HeldBack.JUMP, "held back")))
     state = await store.state("rate", since=T0 + timedelta(minutes=15))
-    assert list(state.suspects) == [Decimal(1810)]
+    assert [held.value for held in state.suspects] == [Decimal(1810)]
 
 
 async def test_control_readings_are_recorded_and_never_published(store: PostgresStore) -> None:
     # As a run records them: the control first, fetched after the primary, then the decision.
     await store.record(at(0, Accepted(reading("1600"))))
     await store.record(at(11, Control(reading("1601"))))
-    await store.record(at(10, Suspect(reading("1800"), "held back")))
+    await store.record(at(10, Suspect(reading("1800"), HeldBack.JUMP, "held back")))
     latest = await store.latest("rate")
     assert latest.published is not None
     assert latest.published.value == Decimal(1600)
     assert latest.suspect_at == T0 + timedelta(minutes=10)
     # The last recorded attempt, by order of recording.
     assert latest.last_attempt_at == T0 + timedelta(minutes=10)
-    assert list((await store.state("rate", SINCE)).suspects) == [Decimal(1800)]
+    assert [held.value for held in (await store.state("rate", SINCE)).suspects] == [Decimal(1800)]
 
 
 async def test_a_control_recorded_after_a_suspect_does_not_hide_it(store: PostgresStore) -> None:
     # Only if a run stops between its control and its decision, and the next run's control is
     # recorded: the suspect before is still the newest valid reading.
     await store.record(at(0, Accepted(reading("1600"))))
-    await store.record(at(10, Suspect(reading("1800"), "held back")))
+    await store.record(at(10, Suspect(reading("1800"), HeldBack.JUMP, "held back")))
     await store.record(at(21, Control(reading("1601"))))
     assert (await store.latest("rate")).suspect_at == T0 + timedelta(minutes=10)
 
@@ -340,3 +367,75 @@ def _definitions(connection: Connection, schema: str) -> dict[str, object]:
             " WHERE schemaname = :schema AND tablename <> 'alembic_version' ORDER BY 1, 2"
         ),
     }
+
+
+BUENOS_AIRES = ZoneInfo("America/Argentina/Buenos_Aires")
+
+
+async def test_past_values_are_history_not_attempts(store: PostgresStore) -> None:
+    assert not await store.has_history("rate")
+    await store.record(at(-10, Accepted(reading("1600"))))
+    # A suspect pending when the app starts and loads the past values.
+    await store.record(at(0, Suspect(reading("1800"), HeldBack.JUMP, "held")))
+    past = [reading("1500", -60 * 24 * 2), reading("1550", -60 * 24)]
+    await store.record_history("rate", "history", T0 + timedelta(minutes=5), past)
+    assert await store.has_history("rate")
+    assert not await store.has_history("other")
+    latest = await store.latest("rate")
+    assert latest.published is not None
+    assert latest.published.value == Decimal(1600)
+    assert latest.last_attempt_at == T0
+    assert latest.suspect_at == T0
+    # The newest row is a past value stamped 18:05: it is not this slot's attempt.
+    assert not await store.attempted_in(
+        "rate", T0 + timedelta(minutes=5), T0 + timedelta(minutes=10)
+    )
+    assert (await store.state("rate", SINCE)).last_accepted == Decimal(1600)
+
+
+async def test_daily_keeps_the_latest_value_of_each_local_day(store: PostgresStore) -> None:
+    # T0 is 15:00 in Buenos Aires on 2026-09-25.
+    await store.record_history("rate", "history", T0, [reading("1500", -60 * 24)])
+    await store.record(at(0, Accepted(reading("1600", 0))))
+    await store.record(at(10, Accepted(reading("1610", 10))))
+    await store.record(at(20, Suspect(reading("1800", 20), HeldBack.JUMP, "held")))
+    await store.record(at(30, Rejected(Rejection.FETCH_FAILED, "timeout")))
+    # 21:30 in Buenos Aires is 00:30 UTC on the 26th: still the 25th there.
+    await store.record(at(390, Accepted(reading("1620", 390))))
+    days = await store.daily("rate", date(2026, 9, 24), date(2026, 9, 26), BUENOS_AIRES)
+    assert [(day.date, day.value, day.source) for day in days] == [
+        (date(2026, 9, 24), Decimal(1500), "history"),
+        (date(2026, 9, 25), Decimal(1620), "source"),
+    ]
+    only_24 = await store.daily("rate", date(2026, 9, 24), date(2026, 9, 24), BUENOS_AIRES)
+    assert [day.date for day in only_24] == [date(2026, 9, 24)]
+
+
+async def test_daily_prefers_the_latest_as_of_whatever_was_recorded_first(
+    store: PostgresStore,
+) -> None:
+    # As in production: live readings are in the table before the past values are loaded.
+    # 17:25 in Buenos Aires (live) beats 17:00 (the loaded close), though recorded earlier.
+    live = datetime(2026, 9, 24, 20, 25, tzinfo=UTC)
+    await store.record(Observation("rate", "live", live, Accepted(Reading(Decimal(1540), live))))
+    close = datetime(2026, 9, 24, 20, 0, tzinfo=UTC)
+    await store.record_history("rate", "history", T0, [Reading(Decimal(1537), close)])
+    # On a tie, the one recorded last.
+    tie = datetime(2026, 9, 23, 20, 0, tzinfo=UTC)
+    await store.record(Observation("rate", "live", tie, Accepted(Reading(Decimal(1530), tie))))
+    await store.record_history("rate", "history", T0, [Reading(Decimal(1531), tie)])
+    days = await store.daily("rate", date(2026, 9, 23), date(2026, 9, 24), BUENOS_AIRES)
+    assert [(day.value, day.source) for day in days] == [
+        (Decimal(1531), "history"),
+        (Decimal(1540), "live"),
+    ]
+
+
+async def test_daily_uses_only_published_and_loaded_values(store: PostgresStore) -> None:
+    await store.record(at(0, Accepted(reading("1600", 0))))
+    # Newer as_of the same day, but not published values.
+    await store.record(at(10, Suspect(reading("1800", 10), HeldBack.JUMP, "held")))
+    await store.record(at(11, Control(reading("1700", 11))))
+    await store.record(at(12, Rejected(Rejection.IMPLAUSIBLE, "no", reading("16", 12))))
+    days = await store.daily("rate", date(2026, 9, 25), date(2026, 9, 25), BUENOS_AIRES)
+    assert [day.value for day in days] == [Decimal(1600)]

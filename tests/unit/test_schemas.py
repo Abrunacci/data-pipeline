@@ -8,9 +8,12 @@ from data_pipeline.api.schemas import latest_rate
 from data_pipeline.config import DEFAULT_SERIES_FILE, load_series
 from data_pipeline.core.gap import Gap
 from data_pipeline.runner.store import Latest, Published
-from data_pipeline.sources import available_sources
+from data_pipeline.sources import available_history_sources, available_sources
 
-SERIES = {s.id: s for s in load_series(DEFAULT_SERIES_FILE, available_sources())}
+SERIES = {
+    s.id: s
+    for s in load_series(DEFAULT_SERIES_FILE, available_sources(), available_history_sources())
+}
 # Friday 2026-09-25, 17:00 in Buenos Aires.
 FRIDAY_CLOSE = datetime(2026, 9, 25, 20, 0, tzinfo=UTC)
 

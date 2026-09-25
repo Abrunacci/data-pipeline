@@ -24,6 +24,7 @@ class Series:
     - ``hours``: the series only runs, and its values only age, while they are open. None is
       always open.
     - ``official_source``: False when the source is not a documented, official one.
+    - ``history``: the history source its past values are loaded from, once.
     - ``indicative``: the value is a reference price, not the one a trade gets. ``gap`` is how
       much less a trade got, from observed pairs, when there are any.
     """
@@ -38,6 +39,7 @@ class Series:
     official_source: bool = True
     indicative: bool = False
     gap: Gap | None = None
+    history: str | None = None
 
     def __post_init__(self) -> None:
         if not self.sources:
@@ -46,6 +48,9 @@ class Series:
             raise ValueError(f"series {self.id} lists a source twice")
         if self.every <= timedelta(0):
             raise ValueError(f"series {self.id}: every must be positive, got {self.every}")
+        # Past values are kept up to the day before, and "day" needs the series' zone.
+        if self.history is not None and self.hours is None:
+            raise ValueError(f"series {self.id}: a history source needs opening hours")
         if self.gap is not None and not self.indicative:
             raise ValueError(f"series {self.id}: only an indicative series has a gap")
         if self.control is not None and self.control in self.sources[:1]:

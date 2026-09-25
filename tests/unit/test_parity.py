@@ -16,7 +16,7 @@ import pytest
 
 from data_pipeline.config import DEFAULT_SERIES_FILE, load_series
 from data_pipeline.core.checks import MAX_DECIMALS, MAX_VALUE
-from data_pipeline.sources import available_sources
+from data_pipeline.sources import available_history_sources, available_sources
 
 CALCULATOR = os.environ.get("CUANTO_CUESTA_DIR")
 pytestmark = pytest.mark.skipif(CALCULATOR is None, reason="CUANTO_CUESTA_DIR is not set")
@@ -51,7 +51,9 @@ def test_plausible_ranges_match_the_calculator_warnings() -> None:
         )
     }
     assert checks, "could not read PRICE_CHECKS from plausible.ts"
-    for series in load_series(DEFAULT_SERIES_FILE, available_sources()):
+    for series in load_series(
+        DEFAULT_SERIES_FILE, available_sources(), available_history_sources()
+    ):
         assert series.id in checks, f"{series.id} is not a calculator rate"
         plausible = series.rules.plausible
         assert (plausible.min, plausible.max) == checks[series.id], series.id

@@ -13,7 +13,7 @@ from data_pipeline.core.checks import (
     reading_problem,
     value_problem,
 )
-from data_pipeline.core.readings import Accepted, Reading, Rejection, Suspect
+from data_pipeline.core.readings import Accepted, Held, HeldBack, Reading, Rejection, Suspect
 
 NOW = datetime(2026, 9, 25, 18, 0, tzinfo=UTC)
 RULES = Rules(
@@ -116,11 +116,18 @@ def test_rules_refuse_fractions_outside_zero_to_one() -> None:
 
 
 def decide_(value: str, suspects: list[int | str] = [], control: str | None = None) -> object:  # noqa: B006
-    """``decide`` with the last accepted value at 1600 and a 5 % jump (1520 to 1680)."""
+    """``decide`` with the last accepted value at 1600 and a 5 % jump (1520 to 1680). Each
+    suspect is held back for the reason it would have been: a jump when it is outside that
+    band, a disagreement with the control otherwise."""
+    held = []
+    for suspect in suspects:
+        number = Decimal(suspect)
+        jumped = abs(number - 1600) > 80
+        held.append(Held(number, HeldBack.JUMP if jumped else HeldBack.DISAGREEMENT))
     return decide(
         reading(value),
         Decimal(1600),
-        [Decimal(s) for s in suspects],
+        held,
         None if control is None else Decimal(control),
         RULES,
     )
@@ -139,8 +146,7 @@ class TestDecide:
     def test_a_bigger_move_is_a_suspect(self) -> None:
         for value in ["1680.01", "1519.99"]:
             outcome = decide_(value)
-            assert isinstance(outcome, Suspect), value
-            assert outcome.detail == "jumped from 1600"
+            assert outcome == Suspect(reading(value), HeldBack.JUMP, "jumped from 1600")
 
 
 class TestJumps:
@@ -191,7 +197,9 @@ class TestControl:
     def test_a_disagreement_is_a_suspect(self) -> None:
         # 1650 is within 5 % of 1600, but 1.5 % of the control is 24.15: up to 1634.15.
         outcome = decide_("1650", control="1610")
-        assert outcome == Suspect(reading("1650"), detail="the control source says 1610")
+        assert outcome == Suspect(
+            reading("1650"), HeldBack.DISAGREEMENT, "the control source says 1610"
+        )
 
     def test_a_persistent_disagreement_confirms_itself(self) -> None:
         outcome = decide_("1650", [1640, 1655], control="1610")
@@ -200,9 +208,24 @@ class TestControl:
         )
 
     def test_persistence_needs_the_suspects_within_max_jump_of_the_reading(self) -> None:
-        # 1650 * 1.05 = 1732.5
-        assert isinstance(decide_("1650", [1733, 1655], control="1610"), Suspect)
-        assert isinstance(decide_("1650", ["1732.5", 1655], control="1610"), Accepted)
+        # 1650 * 0.95 = 1567.5: both suspects disagreed with the control, but 1567 is too far.
+        assert isinstance(decide_("1650", [1567, 1655], control="1610"), Suspect)
+        assert isinstance(decide_("1650", ["1567.5", 1655], control="1610"), Accepted)
 
     def test_a_reading_back_near_the_last_accepted_is_accepted(self) -> None:
         assert decide_("1610", [1800, 1800]) == Accepted(reading("1610"))
+
+    def test_jumps_do_not_count_towards_persistence(self) -> None:
+        # 1700 and 1690 were jumps, so they say nothing about the control: 1640 is held back.
+        assert isinstance(decide_("1640", [1700, 1690], control="1560"), Suspect)
+        # Two disagreements before it do confirm it.
+        assert isinstance(decide_("1640", [1650, 1645], control="1560"), Accepted)
+
+    def test_a_suspect_recorded_without_its_reason_counts_for_neither(self) -> None:
+        unknown = [Held(Decimal(1650), None), Held(Decimal(1645), None)]
+        outcome = decide(reading("1640"), Decimal(1600), unknown, Decimal(1560), RULES)
+        assert isinstance(outcome, Suspect)
+        unknown_jumps = [Held(Decimal(1800), None), Held(Decimal(1850), None)]
+        outcome = decide(reading("1900"), Decimal(1600), unknown_jumps, None, RULES)
+        # A jump run looks at the values only, so these still count.
+        assert isinstance(outcome, Accepted)

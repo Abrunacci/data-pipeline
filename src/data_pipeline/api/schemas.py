@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Literal
+from zoneinfo import ZoneInfo
 
+from fastapi import HTTPException, status
 from pydantic import BaseModel
 
 from data_pipeline.core.gap import Gap
 from data_pipeline.core.series import Series
-from data_pipeline.runner.store import Latest
+from data_pipeline.runner.store import Day, Latest
 
 
 class FinalPriceGap(BaseModel):
@@ -55,6 +58,58 @@ class LatestRates(BaseModel):
     """Every configured series, by id."""
 
     rates: dict[str, Rate]
+
+
+# Days of the history are days in Buenos Aires: the calculator's users' days.
+HISTORY_ZONE = ZoneInfo("America/Argentina/Buenos_Aires")
+DEFAULT_HISTORY_DAYS = 30
+MAX_HISTORY_DAYS = 400
+# No series has values before this; it also keeps date arithmetic far from date.min.
+EARLIEST_HISTORY_DAY = date(2000, 1, 1)
+
+
+class DayValue(BaseModel):
+    """A series on one day: the value with the latest ``as_of`` that day, published by the
+    pipeline or loaded from its history source (``source`` says which)."""
+
+    date: date
+    value: str
+    as_of: datetime
+    source: str
+
+
+class History(BaseModel):
+    """``days`` has only the days with a value: none on weekends for the MEP, none before the
+    first value."""
+
+    series: str
+    first: date
+    last: date
+    days: list[DayValue]
+
+
+@dataclass(frozen=True, slots=True)
+class DayRange:
+    first: date
+    last: date
+
+
+def history_range(first: date | None, last: date | None, today: date) -> DayRange:
+    """The days a history request covers, or a 422 naming the problem."""
+    last = today if last is None else last
+    for day in (first, last):
+        if day is not None and not EARLIEST_HISTORY_DAY <= day <= today + timedelta(days=1):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "date_out_of_range")
+    first = last - timedelta(days=DEFAULT_HISTORY_DAYS - 1) if first is None else first
+    if first > last:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "from_after_to")
+    if (last - first).days + 1 > MAX_HISTORY_DAYS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "range_too_long")
+    return DayRange(first, last)
+
+
+def day_value(day: Day) -> DayValue:
+    return DayValue(date=day.date, value=format(day.value, "f"), as_of=day.as_of, source=day.source)
 
 
 class Health(BaseModel):
