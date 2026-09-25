@@ -20,10 +20,8 @@ class MemoryStore:
         self.observations.append(observation)
 
     def _of(self, series_id: str) -> list[Observation]:
-        return sorted(
-            (o for o in self.observations if o.series_id == series_id),
-            key=lambda o: o.fetched_at,
-        )
+        # In the order they were recorded, like the Postgres store's ids.
+        return [o for o in self.observations if o.series_id == series_id]
 
     async def state(self, series_id: str) -> SeriesState:
         last: Decimal | None = None
@@ -54,8 +52,9 @@ class MemoryStore:
             last_attempt_at=history[-1].fetched_at if history else None,
         )
 
-    async def attempted_since(self, series_id: str, moment: datetime) -> bool:
-        return any(o.fetched_at >= moment for o in self._of(series_id))
+    async def attempted_in(self, series_id: str, start: datetime, end: datetime) -> bool:
+        history = self._of(series_id)
+        return bool(history) and start <= history[-1].fetched_at < end
 
     @asynccontextmanager
     async def exclusive(self, series_id: str) -> AsyncIterator[bool]:

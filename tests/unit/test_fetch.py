@@ -7,7 +7,6 @@ import httpx
 import pytest
 
 from data_pipeline.core.sources import Request
-from data_pipeline.runner import fetch as fetch_module
 from data_pipeline.runner.fetch import FetchError, fetch
 
 pytestmark = pytest.mark.anyio
@@ -71,17 +70,15 @@ async def test_does_not_retry_other_answers(status: int) -> None:
     assert len(sent) == 1
 
 
-async def test_refuses_a_body_over_the_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(fetch_module, "MAX_BODY_BYTES", 10)
+async def test_refuses_a_body_over_the_size_limit() -> None:
     http, _ = client([httpx.Response(200, content=b"x" * 11)])
     with pytest.raises(FetchError, match="larger than 10 bytes"):
-        await fetch(http, REQUEST)
+        await fetch(http, REQUEST, max_bytes=10)
     http, _ = client([httpx.Response(200, content=b"x" * 10)])
-    assert await fetch(http, REQUEST) == b"x" * 10
+    assert await fetch(http, REQUEST, max_bytes=10) == b"x" * 10
 
 
-async def test_an_attempt_that_takes_too_long_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(fetch_module, "ATTEMPT_TIMEOUT_SECONDS", 0.01)
+async def test_an_attempt_that_takes_too_long_is_retried() -> None:
     calls: list[int] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -92,5 +89,5 @@ async def test_an_attempt_that_takes_too_long_is_retried(monkeypatch: pytest.Mon
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     sleep, waits = no_sleep()
-    assert await fetch(http, REQUEST, delays=(1,), sleep=sleep) == b"ok"
+    assert await fetch(http, REQUEST, delays=(1,), sleep=sleep, attempt_timeout=0.01) == b"ok"
     assert waits == [1]

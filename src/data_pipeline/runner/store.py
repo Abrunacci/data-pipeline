@@ -50,8 +50,12 @@ class Store(Protocol):
 
     async def latest(self, series_id: str) -> Latest: ...
 
-    async def attempted_since(self, series_id: str, moment: datetime) -> bool:
-        """Whether any attempt for the series was recorded at or after ``moment``."""
+    async def attempted_in(self, series_id: str, start: datetime, end: datetime) -> bool:
+        """Whether the last attempt recorded for the series was fetched in ``[start, end)``.
+
+        A last attempt after ``end`` does not count: it was stamped by a clock that ran ahead
+        and has since been corrected, and the current slot still has to run.
+        """
         ...
 
     def exclusive(self, series_id: str) -> AbstractAsyncContextManager[bool]:

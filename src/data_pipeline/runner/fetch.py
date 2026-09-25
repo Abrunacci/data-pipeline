@@ -33,6 +33,8 @@ async def fetch(
     *,
     delays: Sequence[float] = RETRY_DELAYS,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    attempt_timeout: float = ATTEMPT_TIMEOUT_SECONDS,
+    max_bytes: int = MAX_BODY_BYTES,
 ) -> bytes:
     """The body of a 200 answer to ``request``.
 
@@ -41,19 +43,19 @@ async def fetch(
     """
     for delay in (*delays, None):
         try:
-            async with asyncio.timeout(ATTEMPT_TIMEOUT_SECONDS):
-                return await _attempt(client, request)
+            async with asyncio.timeout(attempt_timeout):
+                return await _attempt(client, request, max_bytes)
         except _RetryableError as error:
             problem = str(error)
         except TimeoutError:
-            problem = f"no answer in {ATTEMPT_TIMEOUT_SECONDS:g} s"
+            problem = f"no answer in {attempt_timeout:g} s"
         if delay is None:
             raise FetchError(problem)
         await sleep(delay)
     raise AssertionError("unreachable")
 
 
-async def _attempt(client: httpx.AsyncClient, request: Request) -> bytes:
+async def _attempt(client: httpx.AsyncClient, request: Request, max_bytes: int) -> bytes:
     try:
         async with client.stream(
             request.method, request.url, json=request.json, headers=dict(request.headers)
@@ -65,8 +67,10 @@ async def _attempt(client: httpx.AsyncClient, request: Request) -> bytes:
             body = bytearray()
             async for chunk in response.aiter_bytes():
                 body.extend(chunk)
-                if len(body) > MAX_BODY_BYTES:
-                    raise FetchError(f"answer larger than {MAX_BODY_BYTES} bytes")
+                # Checked after decompression, chunk by chunk: a compressed answer can overshoot
+                # by one chunk before it is refused.
+                if len(body) > max_bytes:
+                    raise FetchError(f"answer larger than {max_bytes} bytes")
             return bytes(body)
     except httpx.HTTPError as error:
         raise _RetryableError(f"{type(error).__name__}: {error}") from error

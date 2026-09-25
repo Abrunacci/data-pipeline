@@ -91,7 +91,7 @@ class PostgresStore:
             last_attempt_at=last_attempt_at,
         )
 
-    async def attempted_since(self, series_id: str, moment: datetime) -> bool:
+    async def attempted_in(self, series_id: str, start: datetime, end: datetime) -> bool:
         async with self._engine.connect() as connection:
             fetched_at = await connection.scalar(
                 select(obs.c.fetched_at)
@@ -99,7 +99,7 @@ class PostgresStore:
                 .order_by(obs.c.id.desc())
                 .limit(1)
             )
-        return fetched_at is not None and fetched_at >= moment
+        return fetched_at is not None and start <= fetched_at < end
 
     @asynccontextmanager
     async def exclusive(self, series_id: str) -> AsyncIterator[bool]:
