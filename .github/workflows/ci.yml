@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly, so a change in cuanto-cuesta that breaks the parity tests shows up even when
+  # nothing changes here: they check against its main branch.
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
