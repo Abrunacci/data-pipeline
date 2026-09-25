@@ -50,10 +50,9 @@ def upgrade() -> None:
         postgresql_where=sa.text("status IN ('accepted', 'confirmed')"),
     )
     # The app only reads and appends: the database enforces that nothing is updated or deleted.
-    if app_user := os.environ.get("APP_DB_USER"):
-        role = op.get_bind().dialect.identifier_preparer.quote(app_user)
-        op.execute(f"GRANT SELECT, INSERT ON observations TO {role}")
-        op.execute(f"GRANT USAGE ON SEQUENCE observations_id_seq TO {role}")
+    role = op.get_bind().dialect.identifier_preparer.quote(os.environ["APP_DB_USER"])
+    op.execute(f"GRANT SELECT, INSERT ON observations TO {role}")
+    op.execute(f"GRANT USAGE ON SEQUENCE observations_id_seq TO {role}")
 
 
 def downgrade() -> None:

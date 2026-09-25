@@ -18,6 +18,10 @@ from data_pipeline.storage.tables import metadata
 url = os.environ.get("MIGRATION_DATABASE_URL") or os.environ.get("DATABASE_URL")
 if not url:
     raise SystemExit("Set MIGRATION_DATABASE_URL or DATABASE_URL to run the migrations.")
+# Required, not optional: a migration applied without its grants is never applied again, so the
+# app would stay without access until someone granted it by hand.
+if not os.environ.get("APP_DB_USER"):
+    raise SystemExit("Set APP_DB_USER to the role the app connects as; migrations grant it access.")
 if context.is_offline_mode():
     raise SystemExit("Offline migrations (--sql) are not supported.")
 
