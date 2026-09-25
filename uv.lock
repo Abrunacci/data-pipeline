@@ -270,6 +270,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyyaml" },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "tzdata" },
     { name = "uvicorn" },
 ]
 
@@ -292,6 +293,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.15.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.1.1" },
+    { name = "tzdata", specifier = ">=2026.4" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 
