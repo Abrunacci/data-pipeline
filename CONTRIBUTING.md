@@ -43,24 +43,37 @@ nothing imports `api`.
   never one made up here.
 - A source's `name` is stored with every observation, so renaming one splits its history.
 - Series are declared in `config/series.yaml`: sources in order (the first is the primary, the
-  rest are fallbacks), interval and checks. Numbers there are read as exact decimals.
-- Only official or documented endpoints unless the plan says otherwise, called with the
-  project's `User-Agent` and well inside their published rate limits. Note the docs and the limit
-  in the source's module docstring.
+  rest are fallbacks), an optional control source, interval, opening hours and checks. Numbers
+  there are read as exact decimals, and times are quoted.
+- Prefer official, documented endpoints, called with the project's `User-Agent` and well inside
+  their published rate limits. A series whose source is undocumented says so with
+  `official_source: false`, which the API publishes. Note the docs, the limit and the terms, or
+  their absence, in the source's module docstring.
+- A source never does I/O. When its answer carries no time, the reading is as of `fetched_at`,
+  which `parse` receives.
 
 ## Checks
 
 Every attempt is recorded with its outcome; nothing is updated or deleted.
 
 1. The source refuses a response with the wrong shape (`MalformedResponseError`): HTML, an error
-   body, a missing field, a naive timestamp.
+   body, a missing field, a field in another format, a naive timestamp. A well-formed answer
+   with nothing to price (too few P2P ads) is `NoQuoteError`.
 2. The value must be one the calculator accepts: positive, at most 1,000,000, at most 8 decimals.
 3. It must be in the series' plausible range, and its timestamp neither older than `max_age` nor
-   in the future.
-4. A value more than `max_jump` away from the last accepted one is a **suspect**: the last
-   accepted value stays published, marked as pending confirmation. It is **confirmed** when the
-   next two readings stay within `confirm_within` of it. A reading back near the last accepted
-   value is accepted.
+   in the future. For a series with opening hours, only open time counts towards the age.
+4. The control source, if any, is read and recorded (status `control`). If it fails, nothing is
+   held back.
+5. A value more than `max_jump` away from the last accepted one, or more than `control_within`
+   (1.5 %) away from the control, is a **suspect**: the last accepted value stays published,
+   marked as pending confirmation. It is **confirmed**:
+   - a jump: at once when the control agrees, or when the two suspects before it jumped the
+     same way;
+   - a disagreement with the control: when the two suspects before it are within `max_jump`
+     of it.
+
+   Suspects older than three intervals expire. A reading back near the last accepted value is
+   accepted. These rules are the product owner's; changing them is a product decision.
 
 A failure in 1–3 tries the next source. A suspect does not: the source did answer.
 

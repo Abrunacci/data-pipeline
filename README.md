@@ -10,11 +10,16 @@ source says it is from.
 
 ## What it collects
 
-| Series | Value | Source |
-|---|---|---|
-| `bitso_usdt_ars` | ARS paid for each USDT sold on Bitso (best bid) | [Bitso public API](https://docs.bitso.com/bitso-api/docs/ticker), every 10 minutes |
+| Series | Value | Source → control | Every |
+|---|---|---|---|
+| `mep` | ARS paid for each USD sold through the MEP (buy side) | [DolarApi](https://dolarapi.com/docs/argentina/operations/get-dolar-bolsa.html) → Ámbito | 15 min, weekdays 10:45–17:30 Buenos Aires |
+| `p2p_usdt_usd` | USD paid for each USDT on Binance P2P: median of the 5 cheapest merchant ads that take 500 USD, from merchants with 95 % of orders completed | [Binance P2P public API](https://www.binance.com/en/skills/detail/binance/p2p) | 10 min |
+| `bitso_usdt_ars` | ARS paid for each USDT sold on Bitso (best bid) | [Bitso public API](https://docs.bitso.com/bitso-api/docs/ticker) → CriptoYa | 10 min |
+| `arq_usd_ars` | ARS ARQ pays for each USDc, at par with USD (its bid) | ARQ's ticker (undocumented, so `official_source: false`), CriptoYa as fallback → CriptoYa | 10 min |
 
-More rates (MEP, Binance P2P, ARQ) come next.
+The series ids are the ones the calculator uses. A Binance card-purchase price is ready to add
+(`binance_card_usdt_usd_list`) once the calculator defines its id; see
+[Card price gap](#card-price-gap).
 
 ## How a value gets published
 
@@ -22,13 +27,41 @@ More rates (MEP, Binance P2P, ARQ) come next.
    errors and 5xx. If the source fails, the next one in the list is tried.
 2. **Parse** strictly: an HTML page, an error body, a missing field or a field in another
    format is rejected.
-3. **Check** the value: one the calculator accepts, in a plausible range, and not stale.
-4. **Hold back jumps**: a value more than 5 % away from the last accepted one is a suspect. The
-   previous value stays published, marked `pending_confirmation`, until the next two readings
-   agree with it; then it is published. A real move takes two more runs (20 minutes) to show;
-   a one-off glitch never does.
+3. **Check** the value: one the calculator accepts, in a plausible range, and not stale. A
+   market's value only ages while it is open: Friday's closing MEP is not stale on Saturday.
+4. **Cross-check** it with the series' control source, a second source read every run and
+   never published.
+5. **Hold back** a value that jumped more than the series allows (5 %, 2 % for P2P) from the
+   last published one, or that the control disagrees with by more than 1.5 %. The previous
+   value stays published, marked `pending_confirmation`, until the value confirms itself:
+   - a jump, at once if the control agrees, or when the next two readings jumped the same
+     way (the market moved, even if it keeps moving);
+   - a disagreement, when the next two readings stay within 5 % of it (the value persists).
+
+   A real move shows within two more runs; a one-off glitch never does. Held-back values
+   expire after three intervals, so an old one cannot confirm a new jump after an outage.
 
 Every attempt is stored with its outcome and reason, so the history shows the failures too.
+
+## Card price gap
+
+Binance lists a price for buying USDT with a card, but the final screen gives less: on
+2026-09-25, 10 USD bought 9.35393217 USDT against 9.7763 listed, 4.3 % less. The final price
+is only shown to a logged-in user, so the gap is estimated from observed pairs, written down by
+hand in [`data/binance_card_quotes.csv`](data/binance_card_quotes.csv):
+
+| Column | Meaning |
+|---|---|
+| `observed_at` | when, ISO 8601 with its time zone, e.g. `2026-09-25T15:10:00-03:00` |
+| `fiat_amount_usd` | the amount paid, in USD |
+| `list_usdt` | the USDT the payment-method list promised for that amount |
+| `final_usdt` | the USDT the final screen gave, after every fee |
+| `fee_usd` | the fee the final screen showed, for the record |
+| `note` | optional |
+
+The published gap is the median of `1 - final_usdt / list_usdt` over every row, with how many
+rows there are and their first and last dates. The file is checked when the app starts: a row
+with a naive time, a missing column or a final above the list stops it with the line number.
 
 ## Why not Airflow
 
@@ -50,22 +83,30 @@ What Airflow would give is built in:
 ```json
 {
   "rates": {
-    "bitso_usdt_ars": {
-      "value": "1613.79",
-      "as_of": "2026-09-25T18:55:25Z",
-      "fetched_at": "2026-09-25T18:55:25.636472Z",
-      "source": "bitso_usdt_ars_bid",
+    "arq_usd_ars": {
+      "value": "1609.79859",
+      "as_of": "2026-09-25T21:04:24.971394Z",
+      "fetched_at": "2026-09-25T21:04:24.919489Z",
+      "source": "arq_usdc_ars_bid",
       "stale": false,
       "pending_confirmation": false,
-      "last_attempt_at": "2026-09-25T18:55:25.636472Z"
+      "last_attempt_at": "2026-09-25T21:04:24.919489Z",
+      "official_source": false,
+      "indicative": false,
+      "final_price_gap": null
     }
   }
 }
 ```
 
-- `value` is a decimal string.
-- A series with no accepted value yet is `null`.
-- `stale` means `as_of` is older than the series allows.
+- Every configured series is listed. `value` is a decimal string; it and `as_of`,
+  `fetched_at` and `source` are `null` until a first value is accepted, while
+  `last_attempt_at` still shows whether the sources are being asked.
+- `stale`: no value, or `as_of` is older than the series allows (open-market time for the MEP).
+- `pending_confirmation`: a newer reading is held back and may replace this value soon.
+- `official_source: false`: the value comes from an undocumented source.
+- `indicative`: a reference price, not what a trade gets; `final_price_gap` (`percent`,
+  `samples`, `first`, `last`) says how much less a trade got, when there are observations.
 
 `GET /health` returns 200 when the app can read its table, and 503 when it cannot. Both
 endpoints answer 503 when the database is down.
