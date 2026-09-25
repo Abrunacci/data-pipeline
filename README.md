@@ -86,10 +86,16 @@ For development, with [uv](https://docs.astral.sh/uv/):
 
 ```sh
 uv sync
-export DATABASE_URL=postgresql+psycopg://pipeline:pipeline@localhost:5432/pipeline
+docker compose up -d db          # the database, with the owner and app roles
+export MIGRATION_DATABASE_URL=postgresql+psycopg://pipeline:pipeline@localhost:5432/pipeline
+export APP_DB_USER=pipeline_app
+export DATABASE_URL=postgresql+psycopg://pipeline_app:pipeline_app@localhost:5432/pipeline
 uv run alembic upgrade head
 uv run uvicorn --factory data_pipeline.api.main:app --reload
 ```
+
+The roles are created when the `db` volume is first created. After pulling a change to them,
+recreate it with `docker compose down -v`.
 
 Settings come from the environment:
 
@@ -97,7 +103,7 @@ Settings come from the environment:
 |---|---|---|
 | `DATABASE_URL` | required | `postgresql+psycopg://…` |
 | `MIGRATION_DATABASE_URL` | `DATABASE_URL` | the database owner, used by Alembic only |
-| `APP_DB_USER` | none | the role the migrations grant access to (the one in `DATABASE_URL`) |
+| `APP_DB_USER` | required by Alembic | the role the migrations grant access to (the one in `DATABASE_URL`) |
 | `RUN_SCHEDULER` | `true` | `false` serves the API without collecting |
 | `CORS_ORIGINS` | none | comma-separated origins allowed to read the API from a browser |
 | `SERIES_FILE` | `config/series.yaml` in a checkout | set in the image |
