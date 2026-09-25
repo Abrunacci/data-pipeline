@@ -166,6 +166,8 @@ class OldSource:
         (datetime(2026, 9, 28, 13, 45, tzinfo=UTC), True),
         # Monday 11:44: 1 + 59 = 60 open minutes, the limit.
         (datetime(2026, 9, 28, 14, 44, tzinfo=UTC), True),
+        # Monday 11:45: 61.
+        (datetime(2026, 9, 28, 14, 45, tzinfo=UTC), False),
         # Tuesday 10:45: 1 + 405 minutes of Monday.
         (datetime(2026, 9, 29, 13, 45, tzinfo=UTC), False),
     ],
@@ -312,3 +314,11 @@ class TestSlots:
             await run_forever(SERIES, SOURCES, client, BrokenStore(), lambda: NOW, sleep)
         # Both runs failed and each one waited for the next slot, at 18:10.
         assert waits == [420.0, 420.0]
+
+
+async def test_a_bug_outside_the_parser_stops_the_run() -> None:
+    # A closed client is not a source failing: it must not be recorded as a bad answer.
+    client = http({})
+    await client.aclose()
+    with pytest.raises(RuntimeError):
+        await collect(SERIES, SOURCES, client, MemoryStore(), lambda: NOW)

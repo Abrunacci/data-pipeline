@@ -70,14 +70,17 @@ async def collect(
 async def _read(
     series: Series, source: Source, client: httpx.AsyncClient, now: Clock
 ) -> tuple[datetime, Reading | Rejected]:
-    """Fetch, parse and check one reading. The time is when the answer arrived."""
-    fetched_at = now()
+    """Fetch, parse and check one reading. The time is when the answer arrived, or when the
+    fetch gave up."""
     try:
         body = await fetch(client, source.request())
-        fetched_at = now()
-        reading = source.parse(body, fetched_at)
     except FetchError as error:
-        return fetched_at, Rejected(Rejection.FETCH_FAILED, str(error))
+        return now(), Rejected(Rejection.FETCH_FAILED, str(error))
+    # Anything else from fetch (a closed client, a bad URL) is a bug: it stops the run loudly.
+
+    fetched_at = now()
+    try:
+        reading = source.parse(body, fetched_at)
     except MalformedResponseError as error:
         return fetched_at, Rejected(Rejection.MALFORMED, str(error))
     except NoQuoteError as error:

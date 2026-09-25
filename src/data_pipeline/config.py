@@ -184,7 +184,9 @@ def load_gap_samples(path: Path) -> list[GapSample]:
                 raise GapSamplesError(f"{where}: expected {len(GAP_COLUMNS)} columns")
             try:
                 if not Decimal(row["fee_usd"]).is_finite() or Decimal(row["fee_usd"]) < 0:
-                    raise ValueError(f"fee_usd must be a finite amount, got {row['fee_usd']}")
+                    raise ValueError(
+                        f"fee_usd must be a finite, non-negative amount, got {row['fee_usd']}"
+                    )
                 observed_at = datetime.fromisoformat(row["observed_at"])
                 samples.append(
                     GapSample(
