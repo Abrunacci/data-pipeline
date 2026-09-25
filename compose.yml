@@ -1,7 +1,10 @@
-# Local development: Postgres, the migrations and the app. `docker compose up --build`.
+# Local development, set up like the server: `docker compose up --build`.
+# The owner role runs the migrations and the app connects as a role that only has what the
+# migrations grant it, from a read-only container with an arbitrary uid and 256 MB of memory.
 services:
   db:
-    image: postgres:17-alpine
+    # The image the server runs (infra: ansible/roles/postgres/defaults/main.yml).
+    image: postgres:17.11-trixie@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
     environment:
       POSTGRES_USER: pipeline
       POSTGRES_PASSWORD: pipeline
@@ -10,6 +13,7 @@ services:
       - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       - db:/var/lib/postgresql/data
+      - ./docker/create-app-role.sql:/docker-entrypoint-initdb.d/create-app-role.sql:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "pipeline"]
       interval: 2s
@@ -20,7 +24,14 @@ services:
     build: .
     command: ["alembic", "upgrade", "head"]
     environment:
-      DATABASE_URL: postgresql+psycopg://pipeline:pipeline@db/pipeline
+      MIGRATION_DATABASE_URL: postgresql+psycopg://pipeline:pipeline@db/pipeline
+      APP_DB_USER: pipeline_app
+    user: "10005:10005"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     depends_on:
       db:
         condition: service_healthy
@@ -28,13 +39,17 @@ services:
   app:
     image: data-pipeline:local
     environment:
-      DATABASE_URL: postgresql+psycopg://pipeline:pipeline@db/pipeline
+      DATABASE_URL: postgresql+psycopg://pipeline_app:pipeline_app@db/pipeline
       CORS_ORIGINS: http://localhost:5173
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
+    user: "10005:10005"
     read_only: true
     tmpfs:
       - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
     depends_on:
       migrate:
         condition: service_completed_successfully

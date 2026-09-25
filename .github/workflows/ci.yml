@@ -17,17 +17,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       # For tests/unit/test_parity.py: the calculator whose rules the published values follow.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: Abrunacci/cuanto-cuesta
           path: cuanto-cuesta
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
+          version: "0.12.5"
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --locked
@@ -42,7 +43,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - run: docker build --tag data-pipeline:ci .
+      # Run it the way the server does: read-only, an arbitrary uid, no capabilities.
+      - run: >-
+          docker run --rm --network none --read-only --tmpfs /tmp --user 10005:10005
+          --cap-drop ALL --security-opt no-new-privileges data-pipeline:ci
+          sh -c 'python -c "import data_pipeline.api.main" && alembic history'

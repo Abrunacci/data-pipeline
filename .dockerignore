@@ -6,3 +6,6 @@
 .pytest_cache
 tests
 cuanto-cuesta
+.github
+.env
+.env.*
