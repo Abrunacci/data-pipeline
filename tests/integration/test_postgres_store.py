@@ -134,16 +134,26 @@ async def test_expired_suspects_are_left_out(store: PostgresStore) -> None:
 
 
 async def test_control_readings_are_recorded_and_never_published(store: PostgresStore) -> None:
+    # As a run records them: the control first, fetched after the primary, then the decision.
     await store.record(at(0, Accepted(reading("1600"))))
-    await store.record(at(10, Suspect(reading("1800"), "held back")))
     await store.record(at(11, Control(reading("1601"))))
+    await store.record(at(10, Suspect(reading("1800"), "held back")))
     latest = await store.latest("rate")
     assert latest.published is not None
     assert latest.published.value == Decimal(1600)
-    # The control row does not hide the suspect before it.
     assert latest.suspect_at == T0 + timedelta(minutes=10)
-    assert latest.last_attempt_at == T0 + timedelta(minutes=11)
+    # The last recorded attempt, by order of recording.
+    assert latest.last_attempt_at == T0 + timedelta(minutes=10)
     assert list((await store.state("rate", SINCE)).suspects) == [Decimal(1800)]
+
+
+async def test_a_control_recorded_after_a_suspect_does_not_hide_it(store: PostgresStore) -> None:
+    # Only if a run stops between its control and its decision, and the next run's control is
+    # recorded: the suspect before is still the newest valid reading.
+    await store.record(at(0, Accepted(reading("1600"))))
+    await store.record(at(10, Suspect(reading("1800"), "held back")))
+    await store.record(at(21, Control(reading("1601"))))
+    assert (await store.latest("rate")).suspect_at == T0 + timedelta(minutes=10)
 
 
 async def test_attempted_in_looks_at_the_last_attempt(store: PostgresStore) -> None:
