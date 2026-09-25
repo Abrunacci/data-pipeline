@@ -1,0 +1,61 @@
+# Local development, set up like the server: `docker compose up --build`.
+# The database owner (not a superuser) runs the migrations, and the app connects as a role that
+# only has what the migrations grant it, from a read-only container with the server's uid and
+# 256 MB of memory. The roles are created with the volume: after changing them, `down -v`.
+services:
+  db:
+    # The image the server runs (infra: ansible/roles/postgres/defaults/main.yml).
+    image: postgres:17.11-trixie@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+    environment:
+      # The superuser only sets up the roles (docker/create-roles.sql); nothing connects as it.
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: pipeline
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - db:/var/lib/postgresql/data
+      - ./docker/create-roles.sql:/docker-entrypoint-initdb.d/create-roles.sql:ro
+    healthcheck:
+      # Over TCP: while the init scripts run, the server only listens on its socket.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "pipeline"]
+      interval: 2s
+      retries: 15
+
+  migrate:
+    image: data-pipeline:local
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      MIGRATION_DATABASE_URL: postgresql+psycopg://pipeline:pipeline@db/pipeline
+      APP_DB_USER: pipeline_app
+    user: "10005:10005"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  app:
+    image: data-pipeline:local
+    environment:
+      DATABASE_URL: postgresql+psycopg://pipeline_app:pipeline_app@db/pipeline
+      CORS_ORIGINS: http://localhost:5173
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+    user: "10005:10005"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    memswap_limit: 256m
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  db:

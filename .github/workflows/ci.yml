@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # For tests/unit/test_parity.py: the calculator whose rules the published values follow.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: Abrunacci/cuanto-cuesta
+          path: cuanto-cuesta
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          version: "0.12.5"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked
+      - run: uv run pytest
+        env:
+          CUANTO_CUESTA_DIR: ${{ github.workspace }}/cuanto-cuesta
+      - run: uv run mypy
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build --tag data-pipeline:ci .
+      # Run it the way the server does (read-only, its uid, no capabilities): the migrations
+      # are there, and the app builds, which loads and checks the series file. Building the app
+      # does not connect to the database.
+      - run: >-
+          docker run --rm --network none --read-only --tmpfs /tmp --user 10005:10005
+          --cap-drop ALL --security-opt no-new-privileges
+          --env DATABASE_URL=postgresql+psycopg://unused@localhost/unused data-pipeline:ci
+          sh -c 'alembic history && python -c "from data_pipeline.api.main import app; app()"'

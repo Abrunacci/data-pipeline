@@ -1,0 +1,17 @@
+# The series the pipeline collects. Each id is the public name of the value and never changes:
+# the cuanto-cuesta calculator looks rates up by the same ids (RATE_FIELDS in
+# frontend/src/calculator/data/routes.ts).
+#
+# Numbers are read as exact decimals. Percentages are in percent: 5 is 5 %.
+series:
+  - id: bitso_usdt_ars
+    description: ARS paid for each USDT sold on Bitso as a taker (best bid)
+    sources: [bitso_usdt_ars_bid]
+    every_minutes: 10
+    # The same sanity range the calculator uses (frontend/src/form/plausible.ts).
+    plausible: {min: 500, max: 50000}
+    # Bitso stamps its ticker when it answers, so an older one means something is stuck.
+    max_age_minutes: 30
+    # Bitso moved 1.4 % in the 24 hours before 2026-09-25; 5 % in ten minutes is not normal.
+    max_jump_percent: 5
+    confirm_within_percent: 0.5
