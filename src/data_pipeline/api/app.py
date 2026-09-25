@@ -8,14 +8,16 @@ import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 import httpx
 from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
+from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from data_pipeline.api.schemas import Health, LatestRates, latest_rate
 from data_pipeline.config import Settings, load_series
@@ -25,11 +27,15 @@ from data_pipeline.runner.scheduler import run_forever
 from data_pipeline.runner.store import Store
 from data_pipeline.sources import available_sources
 from data_pipeline.storage.postgres import PostgresStore
+from data_pipeline.storage.tables import observations
 
 logger = logging.getLogger(__name__)
 
 # Every source answers in well under a second; a slow one fails and the next slot tries again.
 HTTP_TIMEOUT = httpx.Timeout(10.0)
+# A database that does not answer in this long is down, for the health check and the API.
+DATABASE_TIMEOUT_SECONDS = 5
+HEALTH_TIMEOUT_SECONDS = 3
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -38,8 +44,15 @@ def create_app(settings: Settings) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        engine = create_async_engine(settings.database_url, pool_size=3, max_overflow=2)
-        store = PostgresStore(engine)
+        engine = _create_engine(
+            settings.database_url,
+            pool_size=3,
+            max_overflow=2,
+            pool_timeout=DATABASE_TIMEOUT_SECONDS,
+        )
+        # Each series holds a lock connection for its whole run; see PostgresStore.
+        lock_engine = _create_engine(settings.database_url, poolclass=NullPool)
+        store = PostgresStore(engine, lock_engine)
         async with httpx.AsyncClient(
             timeout=HTTP_TIMEOUT, headers={"User-Agent": settings.user_agent}
         ) as client:
@@ -55,6 +68,7 @@ def create_app(settings: Settings) -> FastAPI:
                     with suppress(asyncio.CancelledError):
                         await task
                 await engine.dispose()
+                await lock_engine.dispose()
 
     app = FastAPI(title="data-pipeline", lifespan=lifespan)
     if settings.cors_origins:
@@ -62,20 +76,28 @@ def create_app(settings: Settings) -> FastAPI:
             CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["GET"]
         )
 
+    @app.exception_handler(SQLAlchemyError)
+    async def database_unavailable(request: Request, error: SQLAlchemyError) -> JSONResponse:
+        logger.error("database error on %s: %s", request.url.path, error)
+        return JSONResponse(
+            {"detail": "database_unavailable"}, status_code=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+
     @app.get("/health", responses={503: {"model": Health}})
     async def health(
         engine: Annotated[AsyncEngine, Depends(_engine)], response: Response
     ) -> Health:
+        # It reads the app's own table, so a missing schema or grant fails the deploy's check.
         try:
-            async with engine.connect() as connection:
-                await connection.execute(text("SELECT 1"))
-        except (SQLAlchemyError, OSError):
-            logger.exception("health check could not reach the database")
+            async with asyncio.timeout(HEALTH_TIMEOUT_SECONDS), engine.connect() as connection:
+                await connection.execute(select(observations.c.id).limit(1))
+        except (SQLAlchemyError, OSError, TimeoutError) as error:
+            logger.error("health check failed: %s", error)
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return Health(status="database_unavailable")
         return Health(status="ok")
 
-    @app.get("/v1/rates/latest")
+    @app.get("/v1/rates/latest", responses={503: {"description": "The database is down."}})
     async def latest(store: Annotated[Store, Depends(_store)]) -> LatestRates:
         now = datetime.now(UTC)
         return LatestRates(
@@ -95,6 +117,15 @@ def _start(
         asyncio.create_task(run_forever(s, sources, client, store), name=f"series:{s.id}")
         for s in series
     ]
+
+
+def _create_engine(url: str, **options: Any) -> AsyncEngine:
+    return create_async_engine(
+        url,
+        # Timestamps come back in UTC whatever the server's time zone.
+        connect_args={"connect_timeout": DATABASE_TIMEOUT_SECONDS, "options": "-c timezone=UTC"},
+        **options,
+    )
 
 
 def _engine(request: Request) -> AsyncEngine:

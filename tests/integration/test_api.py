@@ -44,10 +44,9 @@ async def test_every_series_is_listed_even_without_a_value(client: httpx.AsyncCl
 
 
 async def test_the_latest_rate_says_when_it_is_from(
-    client: httpx.AsyncClient, engine: AsyncEngine
+    client: httpx.AsyncClient, store: PostgresStore
 ) -> None:
     now = datetime.now(UTC)
-    store = PostgresStore(engine)
     as_of = now - timedelta(minutes=5)
     reading = Reading(Decimal("0.00000001"), as_of)  # plain notation, never 1E-8
     await store.record(Observation("bitso_usdt_ars", "bitso_usdt_ars_bid", now, Accepted(reading)))
@@ -55,6 +54,7 @@ async def test_the_latest_rate_says_when_it_is_from(
     rate = (await client.get("/v1/rates/latest")).json()["rates"]["bitso_usdt_ars"]
     assert rate["value"] == "0.00000001"
     assert datetime.fromisoformat(rate["as_of"]) == as_of
+    assert rate["as_of"].endswith("Z")  # UTC, whatever the database's time zone
     assert datetime.fromisoformat(rate["fetched_at"]) == now
     assert rate["source"] == "bitso_usdt_ars_bid"
     assert rate["stale"] is False
@@ -62,10 +62,9 @@ async def test_the_latest_rate_says_when_it_is_from(
 
 
 async def test_an_old_rate_is_stale_and_a_suspect_is_pending(
-    client: httpx.AsyncClient, engine: AsyncEngine
+    client: httpx.AsyncClient, store: PostgresStore
 ) -> None:
     now = datetime.now(UTC)
-    store = PostgresStore(engine)
     old = Reading(Decimal(1600), now - timedelta(minutes=31))
     await store.record(Observation("bitso_usdt_ars", "s", old.as_of, Accepted(old)))
     jump = Reading(Decimal(1800), now)
@@ -83,3 +82,27 @@ async def test_the_calculator_origin_may_read_it(client: httpx.AsyncClient) -> N
     assert response.headers["access-control-allow-origin"] == origin
     other = await client.get("/v1/rates/latest", headers={"Origin": "https://evil.example"})
     assert "access-control-allow-origin" not in other.headers
+
+
+@pytest.fixture
+async def client_without_database() -> AsyncIterator[httpx.AsyncClient]:
+    # Nothing listens on port 1: the connection is refused at once.
+    app = create_app(
+        Settings(database_url="postgresql+psycopg://u:p@127.0.0.1:1/db", run_scheduler=False)
+    )
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as http,
+    ):
+        yield http
+
+
+async def test_without_a_database_health_and_rates_answer_503(
+    client_without_database: httpx.AsyncClient,
+) -> None:
+    health = await client_without_database.get("/health")
+    assert health.status_code == 503
+    assert health.json() == {"status": "database_unavailable"}
+    rates = await client_without_database.get("/v1/rates/latest")
+    assert rates.status_code == 503
+    assert rates.json() == {"detail": "database_unavailable"}
