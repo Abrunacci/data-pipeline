@@ -277,31 +277,32 @@ def test_the_migrations_build_the_schema_in_tables_py(urls: Urls) -> None:
 
 
 def _definitions(connection: Connection, schema: str) -> dict[str, object]:
-    columns = connection.execute(
-        text(
-            "SELECT column_name, data_type, is_nullable FROM information_schema.columns"
-            " WHERE table_schema = :schema AND table_name = 'observations' ORDER BY column_name"
-        ),
-        {"schema": schema},
-    ).all()
-    constraints = connection.execute(
-        text(
-            "SELECT conname, pg_get_constraintdef(c.oid) FROM pg_constraint c"
-            " JOIN pg_namespace n ON n.oid = c.connamespace"
-            " JOIN pg_class t ON t.oid = c.conrelid"
-            " WHERE n.nspname = :schema AND t.relname = 'observations' ORDER BY conname"
-        ),
-        {"schema": schema},
-    ).all()
-    indexes = connection.execute(
-        text(
-            "SELECT indexname, replace(indexdef, :prefix, '') FROM pg_indexes"
-            " WHERE schemaname = :schema AND tablename = 'observations' ORDER BY indexname"
-        ),
-        {"schema": schema, "prefix": f"{schema}."},
-    ).all()
+    """Every table of ``schema`` as Postgres stored it, with the schema name taken out of the
+    definitions so two schemas compare. Alembic's own table is left out."""
+
+    def rows(sql: str) -> list[tuple[object, ...]]:
+        found = connection.execute(text(sql), {"schema": schema, "prefix": f"{schema}."}).all()
+        return [tuple(row) for row in found]
+
+    tables = "c.relkind = 'r' AND c.relname <> 'alembic_version'"
     return {
-        "columns": [tuple(row) for row in columns],
-        "constraints": [tuple(row) for row in constraints],
-        "indexes": [tuple(row) for row in indexes],
+        "columns": rows(
+            "SELECT c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,"
+            " replace(pg_get_expr(d.adbin, d.adrelid), :prefix, '')"
+            " FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid"
+            " JOIN pg_namespace n ON n.oid = c.relnamespace"
+            " LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum"
+            f" WHERE n.nspname = :schema AND {tables} AND a.attnum > 0 AND NOT a.attisdropped"
+            " ORDER BY 1, 2"
+        ),
+        "constraints": rows(
+            "SELECT c.relname, k.conname, pg_get_constraintdef(k.oid)"
+            " FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid"
+            " JOIN pg_namespace n ON n.oid = c.relnamespace"
+            f" WHERE n.nspname = :schema AND {tables} ORDER BY 1, 2"
+        ),
+        "indexes": rows(
+            "SELECT tablename, indexname, replace(indexdef, :prefix, '') FROM pg_indexes"
+            " WHERE schemaname = :schema AND tablename <> 'alembic_version' ORDER BY 1, 2"
+        ),
     }

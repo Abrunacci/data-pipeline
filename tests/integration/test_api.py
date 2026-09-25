@@ -13,6 +13,7 @@ from data_pipeline.api.app import HEALTH_TIMEOUT_SECONDS, create_app
 from data_pipeline.config import Settings
 from data_pipeline.core.readings import Accepted, Observation, Reading, Suspect
 from data_pipeline.storage.postgres import PostgresStore
+from tests.integration.conftest import Urls
 
 pytestmark = pytest.mark.anyio
 
@@ -132,3 +133,16 @@ async def test_without_a_database_health_and_rates_answer_503(
     rates = await client_without_database.get("/v1/rates/latest")
     assert rates.status_code == 503
     assert rates.json() == {"detail": "database_unavailable"}
+
+
+async def test_a_database_error_that_is_not_an_outage_is_a_500(urls: Urls) -> None:
+    # A role that can connect but may not read the table: a bug to fix, not a database that is
+    # down, so it must not hide behind "database_unavailable".
+    app = create_app(Settings(database_url=urls.no_grants, run_scheduler=False))
+    transport = httpx.ASGITransport(app, raise_app_exceptions=False)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://test") as http,
+    ):
+        response = await http.get("/v1/rates/latest")
+    assert response.status_code == 500

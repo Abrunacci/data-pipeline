@@ -1,5 +1,6 @@
 """The database schema. Alembic migrations in ``migrations/`` create it, and
-``tests/integration/test_migrations.py`` checks that both match."""
+``test_the_migrations_build_the_schema_in_tables_py`` (tests/integration) checks that both
+match."""
 
 from __future__ import annotations
 
