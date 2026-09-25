@@ -49,6 +49,9 @@ nothing imports `api`.
   their published rate limits. A series whose source is undocumented says so with
   `official_source: false`, which the API publishes. Note the docs, the limit and the terms, or
   their absence, in the source's module docstring.
+- A series may name a `history` source: its past values are loaded once, when the app first
+  starts, and stored with status `backfill`. They are part of the daily history and never
+  the current value, an attempt, or a decision. The plausible range is not applied to them.
 - A source never does I/O. When its answer carries no time, the reading is as of `fetched_at`,
   which `parse` receives.
 
