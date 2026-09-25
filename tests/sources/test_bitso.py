@@ -12,6 +12,7 @@ from data_pipeline.sources.bitso import BitsoBid
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SOURCE = BitsoBid("usdt_ars")
+FETCHED_AT = datetime(2026, 9, 25, 18, 3, 31, tzinfo=UTC)
 
 
 def ticker(**payload: object) -> bytes:
@@ -28,7 +29,7 @@ def test_asks_for_the_ticker_of_its_book() -> None:
 
 def test_reads_the_bid_and_its_time_from_a_recorded_response() -> None:
     # Recorded on 2026-09-25: bid 1615.300000000000, ask 1615.97, last 1615.97.
-    reading = SOURCE.parse((FIXTURES / "bitso_ticker_usdt_ars.json").read_bytes())
+    reading = SOURCE.parse((FIXTURES / "bitso_ticker_usdt_ars.json").read_bytes(), FETCHED_AT)
     assert reading.value == Decimal("1615.3")
     assert reading.as_of == datetime(2026, 9, 25, 18, 3, 30, tzinfo=UTC)
 
@@ -36,7 +37,7 @@ def test_reads_the_bid_and_its_time_from_a_recorded_response() -> None:
 def test_a_recorded_error_is_malformed() -> None:
     body = (FIXTURES / "bitso_ticker_error.json").read_bytes()
     with pytest.raises(MalformedResponseError, match="Unknown OrderBook"):
-        SOURCE.parse(body)
+        SOURCE.parse(body, FETCHED_AT)
 
 
 @pytest.mark.parametrize(
@@ -72,9 +73,9 @@ def test_a_recorded_error_is_malformed() -> None:
 )
 def test_anything_else_is_malformed(body: bytes) -> None:
     with pytest.raises(MalformedResponseError):
-        SOURCE.parse(body)
+        SOURCE.parse(body, FETCHED_AT)
 
 
 def test_another_book_is_malformed() -> None:
     with pytest.raises(MalformedResponseError, match="expected book usdt_ars"):
-        SOURCE.parse(ticker(book="usdc_ars"))
+        SOURCE.parse(ticker(book="usdc_ars"), FETCHED_AT)
