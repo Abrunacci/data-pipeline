@@ -1,21 +1,23 @@
 # Local development, set up like the server: `docker compose up --build`.
-# The owner role runs the migrations and the app connects as a role that only has what the
-# migrations grant it, from a read-only container with an arbitrary uid and 256 MB of memory.
+# The database owner (not a superuser) runs the migrations, and the app connects as a role that
+# only has what the migrations grant it, from a read-only container with the server's uid and
+# 256 MB of memory. The roles are created with the volume: after changing them, `down -v`.
 services:
   db:
     # The image the server runs (infra: ansible/roles/postgres/defaults/main.yml).
     image: postgres:17.11-trixie@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
     environment:
-      POSTGRES_USER: pipeline
-      POSTGRES_PASSWORD: pipeline
+      # The superuser only sets up the roles (docker/create-roles.sql); nothing connects as it.
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: pipeline
     ports:
       - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       - db:/var/lib/postgresql/data
-      - ./docker/create-app-role.sql:/docker-entrypoint-initdb.d/create-app-role.sql:ro
+      - ./docker/create-roles.sql:/docker-entrypoint-initdb.d/create-roles.sql:ro
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "pipeline"]
+      # Over TCP: while the init scripts run, the server only listens on its socket.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "pipeline"]
       interval: 2s
       retries: 15
 
@@ -50,6 +52,7 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     mem_limit: 256m
+    memswap_limit: 256m
     depends_on:
       migrate:
         condition: service_completed_successfully

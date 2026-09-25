@@ -1,8 +1,7 @@
-# syntax=docker/dockerfile:1
 ARG PYTHON_IMAGE=python:3.13.15-slim-trixie@sha256:8d9d0b8bcf6506481eae4907c18f5e3e7902e629f5f6d684f9e7c32e85e3ddf0
 
 FROM ${PYTHON_IMAGE} AS build
-COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.5@sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1 /uv /bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
@@ -14,7 +13,8 @@ COPY migrations ./migrations
 RUN uv sync --locked --no-dev --no-editable
 
 FROM ${PYTHON_IMAGE}
-RUN useradd --system --uid 10001 --no-create-home app
+# The uid infra runs backends with.
+RUN useradd --system --uid 10005 --no-create-home app
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 COPY --from=build /app/config /app/config
