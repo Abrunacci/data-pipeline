@@ -183,7 +183,8 @@ def load_gap_samples(path: Path) -> list[GapSample]:
             if None in row or None in row.values():
                 raise GapSamplesError(f"{where}: expected {len(GAP_COLUMNS)} columns")
             try:
-                if not Decimal(row["fee_usd"]).is_finite() or Decimal(row["fee_usd"]) < 0:
+                fee = Decimal(row["fee_usd"])
+                if not fee.is_finite() or fee < 0:
                     raise ValueError(
                         f"fee_usd must be a finite, non-negative amount, got {row['fee_usd']}"
                     )

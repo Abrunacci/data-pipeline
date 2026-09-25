@@ -28,6 +28,8 @@ class Rejection(StrEnum):
 
     FETCH_FAILED = "fetch_failed"
     MALFORMED = "malformed"
+    # The source's own code failed: a bug to fix, not the source's answer.
+    SOURCE_BUG = "source_bug"
     NOT_FINITE = "not_finite"
     NOT_POSITIVE = "not_positive"
     TOO_LARGE = "too_large"

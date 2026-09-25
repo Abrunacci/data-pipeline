@@ -71,12 +71,22 @@ async def _read(
     series: Series, source: Source, client: httpx.AsyncClient, now: Clock
 ) -> tuple[datetime, Reading | Rejected]:
     """Fetch, parse and check one reading. The time is when the answer arrived, or when the
-    fetch gave up."""
+    fetch gave up.
+
+    A bug in the source's own code, building its request or parsing an answer it did not
+    foresee, is logged with its traceback and recorded as ``source_bug``: the run goes on, so a
+    broken control never stops the reading it checks from being decided and recorded. Anything
+    else fetch raises (a closed client) is a bug of the runner: it aborts this series' run,
+    which the scheduler logs before the next slot.
+    """
     try:
-        body = await fetch(client, source.request())
+        request = source.request()
+    except Exception as error:
+        return now(), _source_bug(source, "build its request", error)
+    try:
+        body = await fetch(client, request)
     except FetchError as error:
         return now(), Rejected(Rejection.FETCH_FAILED, str(error))
-    # Anything else from fetch (a closed client, a bad URL) is a bug: it stops the run loudly.
 
     fetched_at = now()
     try:
@@ -86,11 +96,7 @@ async def _read(
     except NoQuoteError as error:
         return fetched_at, Rejected(Rejection.NO_QUOTE, str(error))
     except Exception as error:
-        # A bug in a parser, or an answer it did not foresee. It is logged with its traceback
-        # and recorded like a malformed answer, so the run goes on: a broken control never
-        # stops the reading it checks from being decided and recorded.
-        logger.exception("%s failed to parse its answer", source.name)
-        return fetched_at, Rejected(Rejection.MALFORMED, f"{type(error).__name__}: {error}")
+        return fetched_at, _source_bug(source, "parse its answer", error)
 
     age = series.age(reading.as_of, fetched_at)
     if (problem := reading_problem(reading, series.rules, fetched_at, age)) is not None:
@@ -98,3 +104,8 @@ async def _read(
         return fetched_at, Rejected(reason, detail, reading)
     # Stored and published without trailing zeros: Bitso sends 1615.300000000000.
     return fetched_at, Reading(canonical(reading.value), reading.as_of)
+
+
+def _source_bug(source: Source, doing: str, error: Exception) -> Rejected:
+    logger.exception("%s failed to %s", source.name, doing)
+    return Rejected(Rejection.SOURCE_BUG, f"{doing}: {type(error).__name__}: {error}")
