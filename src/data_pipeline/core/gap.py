@@ -27,8 +27,9 @@ class GapSample:
     def __post_init__(self) -> None:
         if self.observed_at.tzinfo is None:
             raise ValueError("observed_at must be timezone-aware")
-        if not (self.amount > 0 and self.listed > 0 and self.final > 0):
-            raise ValueError(f"amounts must be positive: {self}")
+        amounts = (self.amount, self.listed, self.final)
+        if not all(amount.is_finite() and amount > 0 for amount in amounts):
+            raise ValueError(f"amounts must be positive and finite: {self}")
         if self.final > self.listed:
             raise ValueError(f"final ({self.final}) is more than listed ({self.listed})")
 

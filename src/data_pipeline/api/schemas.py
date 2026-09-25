@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Literal
 
 from pydantic import BaseModel
@@ -63,8 +63,9 @@ class Health(BaseModel):
 
 def latest_rate(latest: Latest, series: Series, now: datetime) -> Rate:
     published = latest.published
+    # The same edge as the runner's: a suspect is alive while its age is at most the expiry.
     pending = latest.suspect_at is not None and (
-        now - latest.suspect_at < series.suspects_expire_after
+        now - latest.suspect_at <= series.suspects_expire_after
     )
     return Rate(
         value=None if published is None else format(published.value, "f"),
@@ -82,7 +83,8 @@ def latest_rate(latest: Latest, series: Series, now: datetime) -> Rate:
 
 def _gap(gap: Gap) -> FinalPriceGap:
     return FinalPriceGap(
-        percent=format((gap.fraction * 100).quantize(Decimal("0.01")), "f"),
+        # Display only: two decimals, half to even. The exact fraction stays in the series.
+        percent=format((gap.fraction * 100).quantize(Decimal("0.01"), ROUND_HALF_EVEN), "f"),
         samples=gap.samples,
         first=gap.first,
         last=gap.last,

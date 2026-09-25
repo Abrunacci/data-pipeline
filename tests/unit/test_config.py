@@ -81,6 +81,7 @@ def test_opening_hours_are_read_in_their_zone(tmp_path: Path) -> None:
         (("America/Argentina/Buenos_Aires", "Mars/Olympus"), "unknown time zone"),
         (("[0, 4]", "[0, 7]"), "weekdays"),
         (('closes: "17:30"', 'closes: "10:00"'), "must be before"),
+        (('opens: "10:45"', 'opens: "10:45-03:00"'), "the zone goes in zone"),
     ],
 )
 def test_opening_hours_mistakes_are_config_errors(
@@ -144,6 +145,10 @@ def test_no_observed_pairs_means_no_gap(tmp_path: Path) -> None:
         (SAMPLES_HEADER + "2026-09-25T15:10:00,10,9.77,9.35,0.2,\n", "timezone-aware"),
         (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,9.35,9.77,0.2,\n", "more than listed"),
         (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,abc,9.35,0.2,\n", r"samples.csv:2"),
+        (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,9.77,9.35,0.2,a, b\n", "6 columns"),
+        (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,9.77,9.35\n", "6 columns"),
+        (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,Infinity,9.35,0.2,\n", "finite"),
+        (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,9.77,9.35,-1,\n", "fee_usd"),
     ],
 )
 def test_observed_pairs_mistakes_are_config_errors(

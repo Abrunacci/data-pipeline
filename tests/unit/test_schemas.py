@@ -37,6 +37,15 @@ def test_a_series_without_hours_ages_all_the_time() -> None:
     assert latest_rate(latest, bitso, FRIDAY_CLOSE + timedelta(minutes=31)).stale
 
 
+def test_a_suspect_is_pending_while_it_is_at_most_three_intervals_old() -> None:
+    bitso = SERIES["bitso_usdt_ars"]
+    value = Published(Decimal(1600), FRIDAY_CLOSE, FRIDAY_CLOSE, "s")
+    latest = Latest(value, FRIDAY_CLOSE, FRIDAY_CLOSE)
+    edge = FRIDAY_CLOSE + timedelta(minutes=30)
+    assert latest_rate(latest, bitso, edge).pending_confirmation
+    assert not latest_rate(latest, bitso, edge + timedelta(seconds=1)).pending_confirmation
+
+
 def test_the_gap_is_published_in_percent() -> None:
     card = SERIES["p2p_usdt_usd"]
     gap = Gap(Decimal("0.04320459"), 3, FRIDAY_CLOSE, FRIDAY_CLOSE + timedelta(days=4))

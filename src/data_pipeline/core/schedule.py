@@ -25,6 +25,8 @@ class OpeningHours:
     def __post_init__(self) -> None:
         if not self.weekdays or not self.weekdays <= set(range(7)):
             raise ValueError(f"weekdays must be some of 0 to 6, got {sorted(self.weekdays)}")
+        if self.opens.tzinfo is not None or self.closes.tzinfo is not None:
+            raise ValueError("opens and closes are local times: the zone goes in zone")
         if not self.opens < self.closes:
             raise ValueError(f"opens ({self.opens}) must be before closes ({self.closes})")
 
