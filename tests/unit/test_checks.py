@@ -46,6 +46,12 @@ def test_canonical_drops_trailing_zeros_in_plain_notation(value: str, expected: 
     assert format(canonical(Decimal(value)), "f") == expected
 
 
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
+def test_canonical_refuses_what_is_not_a_number(value: str) -> None:
+    with pytest.raises(ValueError, match="not a finite number"):
+        canonical(Decimal(value))
+
+
 @pytest.mark.parametrize(
     ("value", "reason"),
     [

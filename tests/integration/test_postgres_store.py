@@ -6,9 +6,7 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from alembic.autogenerate import compare_metadata
-from alembic.migration import MigrationContext
-from sqlalchemy import create_engine, update
+from sqlalchemy import Connection, create_engine, select, text, update
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -28,7 +26,7 @@ from data_pipeline.runner.collect import collect
 from data_pipeline.runner.scheduler import run_slot
 from data_pipeline.sources.bitso import BitsoBid
 from data_pipeline.storage.postgres import PostgresStore
-from data_pipeline.storage.tables import metadata, observations
+from data_pipeline.storage.tables import Status, metadata, observations
 from tests.integration.conftest import Urls
 
 pytestmark = pytest.mark.anyio
@@ -84,9 +82,12 @@ async def test_state_lists_the_suspects_since_the_last_accepted(store: PostgresS
 
 
 async def test_order_is_the_order_of_recording_not_the_clock(store: PostgresStore) -> None:
-    # The server's clock was corrected backwards between the two runs.
+    # The server's clock was corrected backwards between the runs.
     await store.record(at(10, Accepted(reading("1600"))))
     await store.record(at(5, Suspect(reading("1800"))))
+    state = await store.state("rate")
+    assert state.last_accepted == Decimal(1600)
+    assert list(state.suspects) == [Decimal(1800)]
     await store.record(at(5, Accepted(reading("1700"))))
 
     latest = await store.latest("rate")
@@ -121,11 +122,24 @@ async def test_a_rejected_reading_keeps_the_value_the_source_sent(
     assert row.reason == "implausible"
 
 
-async def test_attempted_since_looks_at_the_last_attempt(store: PostgresStore) -> None:
+async def test_attempted_in_looks_at_the_last_attempt(store: PostgresStore) -> None:
+    slot = (T0 + timedelta(minutes=10), T0 + timedelta(minutes=20))
     await store.record(at(10, Rejected(Rejection.FETCH_FAILED, "timeout")))
-    assert await store.attempted_since("rate", T0 + timedelta(minutes=10))
-    assert not await store.attempted_since("rate", T0 + timedelta(minutes=11))
-    assert not await store.attempted_since("other", T0)
+    assert await store.attempted_in("rate", *slot)
+    assert not await store.attempted_in(
+        "rate", T0 + timedelta(minutes=20), T0 + timedelta(minutes=30)
+    )
+    assert not await store.attempted_in("other", *slot)
+
+
+async def test_an_attempt_stamped_by_a_clock_running_ahead_does_not_fill_the_slot(
+    store: PostgresStore,
+) -> None:
+    # Stamped an hour ahead, before the clock was corrected: the 18:10 slot has not run.
+    await store.record(at(70, Accepted(reading("1600", 70))))
+    assert not await store.attempted_in(
+        "rate", T0 + timedelta(minutes=10), T0 + timedelta(minutes=20)
+    )
 
 
 async def test_only_one_runner_holds_a_series(store: PostgresStore, urls: Urls) -> None:
@@ -142,83 +156,84 @@ async def test_only_one_runner_holds_a_series(store: PostgresStore, urls: Urls) 
         assert after
 
 
-async def test_locks_do_not_starve_the_query_pool(urls: Urls, engine: AsyncEngine) -> None:
+RULES = Rules(
+    Range(Decimal(500), Decimal(50_000)),
+    timedelta(minutes=30),
+    Decimal("0.05"),
+    Decimal("0.005"),
+)
+BITSO = BitsoBid("usdt_ars")
+
+
+def bitso_answer(bid: str, as_of: datetime) -> httpx.Response:
+    body = (
+        '{"success": true, "payload": {"book": "usdt_ars",'
+        f' "bid": "{bid}", "created_at": "{as_of.isoformat()}"}}}}'
+    )
+    return httpx.Response(200, content=body.encode())
+
+
+async def test_locks_do_not_starve_the_query_pool(urls: Urls) -> None:
     # A pool of one connection, and more series than that running in the same slot.
     small = create_async_engine(urls.app, pool_size=1, max_overflow=0, pool_timeout=2)
     lock_engine = create_async_engine(urls.app, poolclass=NullPool)
     store = PostgresStore(small, lock_engine)
-    rules = Rules(
-        Range(Decimal(500), Decimal(50_000)),
-        timedelta(minutes=30),
-        Decimal("0.05"),
-        Decimal("0.005"),
-    )
-    source = BitsoBid("usdt_ars")
     series = [
-        Series(f"rate_{n}", "test", (source.name,), timedelta(minutes=10), rules) for n in range(4)
+        Series(f"rate_{n}", "test", (BITSO.name,), timedelta(minutes=10), RULES) for n in range(4)
     ]
 
     async def slow_bitso(request: httpx.Request) -> httpx.Response:
         await asyncio.sleep(0.2)  # every run holds its lock while the others query
-        body = (
-            '{"success": true, "payload": {"book": "usdt_ars", "bid": "1615.3",'
-            f' "created_at": "{datetime.now(UTC).isoformat()}"}}}}'
-        )
-        return httpx.Response(200, content=body.encode())
+        return bitso_answer("1615.3", datetime.now(UTC))
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(slow_bitso))
-    ran = await asyncio.gather(
-        *(
-            run_slot(s, {source.name: source}, client, store, lambda: datetime.now(UTC))
-            for s in series
-        )
-    )
-    assert ran == [True] * 4
-    for s in series:
-        assert (await store.latest(s.id)).published is not None
-    await small.dispose()
-    await lock_engine.dispose()
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(slow_bitso)) as client:
+            ran = await asyncio.gather(
+                *(
+                    run_slot(s, {BITSO.name: BITSO}, client, store, lambda: datetime.now(UTC))
+                    for s in series
+                )
+            )
+        assert ran == [True] * 4
+        for s in series:
+            assert (await store.latest(s.id)).published is not None
+    finally:
+        await small.dispose()
+        await lock_engine.dispose()
 
 
-async def test_a_jump_is_confirmed_through_the_real_store(store: PostgresStore) -> None:
-    rules = Rules(
-        Range(Decimal(500), Decimal(50_000)),
-        timedelta(minutes=30),
-        Decimal("0.05"),
-        Decimal("0.005"),
-    )
-    source = BitsoBid("usdt_ars")
-    series = Series("rate", "test", (source.name,), timedelta(minutes=10), rules)
+async def test_a_jump_is_confirmed_through_the_real_store(
+    store: PostgresStore, engine: AsyncEngine
+) -> None:
+    series = Series("rate", "test", (BITSO.name,), timedelta(minutes=10), RULES)
     bids = iter(["1600", "1800", "1805", "1801"])
-    moments = iter(T0 + timedelta(minutes=10 * n) for n in range(8))
-    now = T0
-
-    def clock() -> datetime:
-        return now
+    clock = [T0]  # the runs are 10 minutes apart
 
     def bitso(request: httpx.Request) -> httpx.Response:
-        body = (
-            '{"success": true, "payload": {"book": "usdt_ars",'
-            f' "bid": "{next(bids)}", "created_at": "{now.isoformat()}"}}}}'
-        )
-        return httpx.Response(200, content=body.encode())
+        return bitso_answer(next(bids), clock[0])
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(bitso))
     outcomes = []
-    for _ in range(4):
-        now = next(moments)
-        [observation] = await collect(series, {source.name: source}, client, store, clock)
-        outcomes.append(type(observation.outcome).__name__)
-        published = (await store.latest("rate")).published
-        assert published is not None
-        if len(outcomes) < 4:
-            assert published.value == Decimal(1600)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(bitso)) as client:
+        for n in range(4):
+            clock[0] = T0 + timedelta(minutes=10 * n)
+            [observation] = await collect(
+                series, {BITSO.name: BITSO}, client, store, lambda: clock[0]
+            )
+            outcomes.append(type(observation.outcome).__name__)
+            published = (await store.latest("rate")).published
+            assert published is not None
+            if n < 3:
+                assert published.value == Decimal(1600)
 
     assert outcomes == ["Accepted", "Suspect", "Suspect", "Accepted"]
     latest = await store.latest("rate")
     assert latest.published is not None
     assert latest.published.value == Decimal(1801)
     assert not latest.pending
+    async with engine.connect() as connection:
+        result = await connection.execute(select(observations.c.status).order_by(observations.c.id))
+        statuses: list[str] = list(result.scalars())
+        assert statuses == [Status.ACCEPTED, Status.SUSPECT, Status.SUSPECT, Status.CONFIRMED]
 
 
 async def test_the_app_role_can_only_read_and_append(
@@ -242,8 +257,51 @@ async def test_the_schema_refuses_an_accepted_row_without_a_value(engine: AsyncE
 
 
 def test_the_migrations_build_the_schema_in_tables_py(urls: Urls) -> None:
-    sync = create_engine(urls.owner)
-    with sync.connect() as connection:
-        differences = compare_metadata(MigrationContext.configure(connection), metadata)
-    sync.dispose()
-    assert differences == []
+    """Build ``tables.py`` in its own schema and compare what Postgres stored for both, down to
+    each check constraint and index definition, which Alembic's comparison does not look at."""
+    owner = create_engine(urls.owner)
+    try:
+        with owner.begin() as connection:
+            connection.execute(text("DROP SCHEMA IF EXISTS expected CASCADE"))
+            connection.execute(text("CREATE SCHEMA expected"))
+            metadata.create_all(
+                connection.execution_options(schema_translate_map={None: "expected"})
+            )
+            migrated, expected = (
+                _definitions(connection, schema) for schema in ("public", "expected")
+            )
+            connection.execute(text("DROP SCHEMA expected CASCADE"))
+    finally:
+        owner.dispose()
+    assert migrated == expected
+
+
+def _definitions(connection: Connection, schema: str) -> dict[str, object]:
+    columns = connection.execute(
+        text(
+            "SELECT column_name, data_type, is_nullable FROM information_schema.columns"
+            " WHERE table_schema = :schema AND table_name = 'observations' ORDER BY column_name"
+        ),
+        {"schema": schema},
+    ).all()
+    constraints = connection.execute(
+        text(
+            "SELECT conname, pg_get_constraintdef(c.oid) FROM pg_constraint c"
+            " JOIN pg_namespace n ON n.oid = c.connamespace"
+            " JOIN pg_class t ON t.oid = c.conrelid"
+            " WHERE n.nspname = :schema AND t.relname = 'observations' ORDER BY conname"
+        ),
+        {"schema": schema},
+    ).all()
+    indexes = connection.execute(
+        text(
+            "SELECT indexname, replace(indexdef, :prefix, '') FROM pg_indexes"
+            " WHERE schemaname = :schema AND tablename = 'observations' ORDER BY indexname"
+        ),
+        {"schema": schema, "prefix": f"{schema}."},
+    ).all()
+    return {
+        "columns": [tuple(row) for row in columns],
+        "constraints": [tuple(row) for row in constraints],
+        "indexes": [tuple(row) for row in indexes],
+    }
