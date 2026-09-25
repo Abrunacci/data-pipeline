@@ -20,7 +20,8 @@ More rates (MEP, Binance P2P, ARQ) come next.
 
 1. **Fetch** from the series' first source, with a 10 s timeout and two retries on network
    errors and 5xx. If the source fails, the next one in the list is tried.
-2. **Parse** strictly: an HTML page, an error body or a missing field is rejected.
+2. **Parse** strictly: an HTML page, an error body, a missing field or a field in another
+   format is rejected.
 3. **Check** the value: one the calculator accepts, in a plausible range, and not stale.
 4. **Hold back jumps**: a value more than 5 % away from the last accepted one is a suspect. The
    previous value stays published, marked `pending_confirmation`, until the next two readings
@@ -66,7 +67,8 @@ What Airflow would give is built in:
 - A series with no accepted value yet is `null`.
 - `stale` means `as_of` is older than the series allows.
 
-`GET /health` returns 200 when the database answers, and 503 when it does not.
+`GET /health` returns 200 when the app can read its table, and 503 when it cannot. Both
+endpoints answer 503 when the database is down.
 
 ## Running it
 
@@ -76,7 +78,9 @@ With Docker:
 docker compose up --build        # Postgres, migrations, then the app on http://localhost:8000
 ```
 
-`APP_PORT` and `DB_PORT` change the host ports.
+It runs like the server: migrations as the database owner, the app as a role with only the
+privileges they grant, from a read-only container limited to 256 MB. `APP_PORT` and `DB_PORT`
+change the host ports.
 
 For development, with [uv](https://docs.astral.sh/uv/):
 
@@ -92,9 +96,10 @@ Settings come from the environment:
 | Variable | Default | |
 |---|---|---|
 | `DATABASE_URL` | required | `postgresql+psycopg://…` |
-| `MIGRATION_DATABASE_URL` | `DATABASE_URL` | used by Alembic only |
+| `MIGRATION_DATABASE_URL` | `DATABASE_URL` | the database owner, used by Alembic only |
+| `APP_DB_USER` | none | the role the migrations grant access to (the one in `DATABASE_URL`) |
 | `RUN_SCHEDULER` | `true` | `false` serves the API without collecting |
 | `CORS_ORIGINS` | none | comma-separated origins allowed to read the API from a browser |
-| `SERIES_FILE` | `config/series.yaml` | |
+| `SERIES_FILE` | `config/series.yaml` in a checkout | set in the image |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the conventions and how to run the checks.

@@ -83,18 +83,28 @@ A failure in 1–3 tries the next source. A suspect does not: the source did ans
 
 ## Database
 
-- Alembic migrations in `migrations/`, run with `alembic upgrade head` (`MIGRATION_DATABASE_URL`,
-  or `DATABASE_URL`). `storage/tables.py` must match them.
+- Two roles, as on the server: the owner runs the migrations (`MIGRATION_DATABASE_URL`), and the
+  app connects as a role that owns nothing (`DATABASE_URL`). Every migration that creates a
+  table or sequence grants the app role (`APP_DB_USER`) exactly what it needs; today that is
+  `SELECT` and `INSERT`, so the database itself keeps the history append-only.
+- Alembic migrations in `migrations/`, run with `alembic upgrade head`. `storage/tables.py` must
+  match them; an integration test compares the two.
+- Rows of a series are ordered by `id`, the order they were recorded in, never by a timestamp: a
+  clock correction must not reorder the history.
+- `/health` reads the app's own table, so a missing schema or grant fails the deploy's health
+  check and triggers the rollback.
 - A deploy can roll back the code but never a migration, so every migration must work with the
   code of the release before it: add columns and tables, do not rename or drop in the same
-  release.
+  release. Migrations run with a 5 s `lock_timeout`, so one that would block the running app
+  fails instead.
 
 ## Tests
 
 - New behaviour ships with tests. Cover the edges: bounds, rounding, invalid input, failures.
 - Sources are tested against recorded responses in `tests/sources/fixtures`, never the network.
   Record a fixture with one real call, and say when it was recorded.
-- Integration tests run against a real Postgres in Docker (testcontainers).
+- Integration tests run against a real Postgres in Docker (testcontainers), the same image as
+  the server, with the app connecting as the limited role.
 - Test behaviour, not implementation. A test that would still pass with the code wrong is a bug.
 
 ## Language
