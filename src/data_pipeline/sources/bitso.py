@@ -7,10 +7,11 @@ per IP (https://docs.bitso.com/bitso-api/docs/general-concepts).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationError
 
 from data_pipeline.core.readings import Reading
 from data_pipeline.core.sources import MalformedResponseError, Request
@@ -20,12 +21,18 @@ TICKER_URL = "https://api.bitso.com/v3/ticker/"
 
 
 class _Payload(BaseModel):
+    # Bitso sends prices as plain decimal strings and times as ISO 8601 strings. Anything else
+    # (a JSON number, an epoch) means the format changed, so it is refused, not coerced.
+    model_config = ConfigDict(strict=True)
+
     book: str
-    bid: Decimal
-    created_at: AwareDatetime
+    bid: Annotated[str, StringConstraints(pattern=r"^[0-9]+(\.[0-9]+)?$")]
+    created_at: str
 
 
 class _Ticker(BaseModel):
+    model_config = ConfigDict(strict=True)
+
     success: Literal[True]
     payload: _Payload
 
@@ -54,7 +61,13 @@ class BitsoBid:
             raise MalformedResponseError(_describe(data, error)) from error
         if ticker.payload.book != self.book:
             raise MalformedResponseError(f"expected book {self.book}, got {ticker.payload.book}")
-        return Reading(ticker.payload.bid, ticker.payload.created_at)
+        try:
+            as_of = datetime.fromisoformat(ticker.payload.created_at)
+        except ValueError as error:
+            raise MalformedResponseError(f"created_at is not ISO 8601: {error}") from error
+        if as_of.tzinfo is None:
+            raise MalformedResponseError(f"created_at has no time zone: {as_of}")
+        return Reading(Decimal(ticker.payload.bid), as_of)
 
 
 def _describe(data: object, error: ValidationError) -> str:

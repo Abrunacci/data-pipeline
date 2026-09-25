@@ -33,14 +33,6 @@ def test_reads_the_bid_and_its_time_from_a_recorded_response() -> None:
     assert reading.as_of == datetime(2026, 9, 25, 18, 3, 30, tzinfo=UTC)
 
 
-def test_reads_a_json_number_exactly() -> None:
-    reading = SOURCE.parse(
-        b'{"success": true, "payload": {"book": "usdt_ars", "bid": 1615.1,'
-        b' "created_at": "2026-09-25T18:03:30+00:00"}}'
-    )
-    assert str(reading.value) == "1615.1"
-
-
 def test_a_recorded_error_is_malformed() -> None:
     body = (FIXTURES / "bitso_ticker_error.json").read_bytes()
     with pytest.raises(MalformedResponseError, match="Unknown OrderBook"):
@@ -56,8 +48,27 @@ def test_a_recorded_error_is_malformed() -> None:
         ticker(bid=None),
         ticker(bid="n/a"),
         ticker(created_at="2026-09-25T18:03:30"),
+        ticker(created_at=1790359410),
+        ticker(created_at="yesterday"),
+        ticker(bid=1615.3),
+        ticker(bid=" 1615.3"),
+        ticker(bid="1_615.3"),
+        ticker(bid="-1615.3"),
     ],
-    ids=["html", "empty", "not-success", "no-bid", "bid-not-a-number", "naive-time"],
+    ids=[
+        "html",
+        "empty",
+        "not-success",
+        "no-bid",
+        "bid-not-a-number",
+        "naive-time",
+        "epoch-time",
+        "not-a-time",
+        "bid-as-json-number",
+        "bid-with-spaces",
+        "bid-with-underscore",
+        "negative-bid",
+    ],
 )
 def test_anything_else_is_malformed(body: bytes) -> None:
     with pytest.raises(MalformedResponseError):
