@@ -55,6 +55,7 @@ def test_decimals_are_read_from_their_text(tmp_path: Path) -> None:
         (("max_jump_percent: 5", "max_jump_percent: 0.05"), "confirm_within"),
         (("id: bitso_usdt_ars", "id: Bitso-USDT"), "id"),
         (("{min: 500, max: 50000}", "{min: 50000, max: 500}"), "min < max"),
+        (("max_age_minutes: 30", "max_age_minutes: 5"), "shorter than every"),
     ],
 )
 def test_mistakes_are_config_errors_naming_the_file(

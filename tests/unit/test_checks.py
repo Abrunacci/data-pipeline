@@ -36,6 +36,10 @@ def reading(value: str, as_of: datetime = NOW) -> Reading:
         ("1000.000", "1000"),
         ("0.00000001", "0.00000001"),
         ("1613.34504", "1613.34504"),
+        ("0.000", "0"),
+        # More digits than Decimal's default precision (28): nothing may be rounded.
+        ("999999.99999999999999999999999", "999999.99999999999999999999999"),
+        ("1615.30000000000000000000000000000000010", "1615.3000000000000000000000000000000001"),
     ],
 )
 def test_canonical_drops_trailing_zeros_in_plain_notation(value: str, expected: str) -> None:
@@ -51,6 +55,8 @@ def test_canonical_drops_trailing_zeros_in_plain_notation(value: str, expected: 
         ("-1", Rejection.NOT_POSITIVE),
         ("1000000.01", Rejection.TOO_LARGE),
         ("1.123456789", Rejection.TOO_MANY_DECIMALS),
+        ("1615.3000000000000000000000000000000001", Rejection.TOO_MANY_DECIMALS),
+        ("999999.99999999999999999999999", Rejection.TOO_MANY_DECIMALS),
     ],
 )
 def test_value_problem_rejects_what_the_calculator_would(value: str, reason: Rejection) -> None:
@@ -109,6 +115,7 @@ class TestDecide:
 
     def test_a_bigger_move_is_a_suspect(self) -> None:
         assert decide(reading("1680.01"), Decimal(1600), [], RULES) == Suspect(reading("1680.01"))
+        assert decide(reading("1519.99"), Decimal(1600), [], RULES) == Suspect(reading("1519.99"))
 
     def test_one_consistent_follower_is_not_enough(self) -> None:
         outcome = decide(reading("1800"), Decimal(1600), [Decimal(1800)], RULES)
@@ -120,6 +127,11 @@ class TestDecide:
         outcome = decide(reading("1791"), Decimal(1600), suspects, RULES)
         assert outcome == Accepted(reading("1791"), confirmed=True)
 
+    def test_the_band_is_closed_on_both_sides_of_the_first_suspect(self) -> None:
+        for value in ["1790.99", "1809.01"]:
+            outcome = decide(reading(value), Decimal(1600), [Decimal(1800), Decimal(1800)], RULES)
+            assert outcome == Suspect(reading(value)), value
+
     def test_a_follower_outside_the_band_does_not_count(self) -> None:
         suspects = [Decimal(1800), Decimal("1809.01")]
         outcome = decide(reading("1800"), Decimal(1600), suspects, RULES)
@@ -130,6 +142,15 @@ class TestDecide:
         suspects = [Decimal(1800), Decimal(1900), Decimal(1901)]
         outcome = decide(reading("1902"), Decimal(1600), suspects, RULES)
         assert outcome == Accepted(reading("1902"), confirmed=True)
+
+    def test_a_reading_cannot_rejoin_an_abandoned_run(self) -> None:
+        outcome = decide(reading("1801"), Decimal(1600), [Decimal(1800), Decimal(1900)], RULES)
+        assert outcome == Suspect(reading("1801"))
+
+    def test_followers_do_not_carry_over_a_broken_run(self) -> None:
+        suspects = [Decimal(1800), Decimal(1801), Decimal(1900)]
+        outcome = decide(reading("1802"), Decimal(1600), suspects, RULES)
+        assert outcome == Suspect(reading("1802"))
 
     def test_a_reading_back_near_the_last_accepted_is_accepted(self) -> None:
         outcome = decide(reading("1610"), Decimal(1600), [Decimal(1800)], RULES)

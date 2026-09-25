@@ -68,17 +68,31 @@ class Rules:
 
 def canonical(value: Decimal) -> Decimal:
     """``value`` without trailing zeros, and with no positive exponent: 1615.300 → 1615.3,
-    1E+3 → 1000. Write it with ``format(value, "f")``: ``str`` uses exponents for tiny values."""
-    if value == value.to_integral_value():
-        return value.quantize(Decimal(1))
-    return value.normalize()
+    1E+3 → 1000. Write it with ``format(value, "f")``: ``str`` uses exponents for tiny values.
+
+    It works on the digits, not with ``normalize()``, which rounds to the context's precision
+    (28 digits) and would change a long value instead of just dropping its zeros.
+    """
+    sign, digits, exponent = value.as_tuple()
+    if not isinstance(exponent, int):  # NaN and infinities have a str exponent
+        raise ValueError(f"not a finite number: {value}")
+    kept = list(digits)
+    if not any(kept):
+        return Decimal((sign, (0,), 0))
+    while exponent < 0 and kept[-1] == 0:
+        kept.pop()
+        exponent += 1
+    if exponent > 0:
+        kept.extend([0] * exponent)
+        exponent = 0
+    return Decimal((sign, tuple(kept), exponent))
 
 
 def decimals(value: Decimal) -> int:
-    """How many decimals ``value`` has once trailing zeros are dropped."""
+    """How many decimals a finite ``value`` has once trailing zeros are dropped."""
     exponent = canonical(value).as_tuple().exponent
-    assert isinstance(exponent, int)  # only NaN and infinities have a str exponent
-    return max(0, -exponent)
+    assert isinstance(exponent, int)  # canonical refuses NaN and infinities
+    return -exponent
 
 
 def value_problem(value: Decimal) -> tuple[Rejection, str] | None:

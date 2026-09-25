@@ -12,7 +12,8 @@ from typing import Literal, Protocol
 
 from data_pipeline.core.readings import Reading
 
-type Json = bool | int | float | str | list[Json] | dict[str, Json] | None
+# No float: request bodies carry exact values, as strings or integers.
+type Json = bool | int | str | list[Json] | dict[str, Json] | None
 
 
 @dataclass(frozen=True, slots=True)
