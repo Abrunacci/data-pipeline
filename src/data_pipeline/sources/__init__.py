@@ -28,5 +28,6 @@ def available_sources() -> Mapping[str, Source]:
         BinanceCardPrice(),
     ]
     by_name = {source.name: source for source in sources}
-    assert len(by_name) == len(sources), "two sources share a name"
+    if len(by_name) != len(sources):
+        raise ValueError("two sources share a name")
     return by_name

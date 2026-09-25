@@ -1,7 +1,10 @@
 """Binance P2P: what a USDT costs in a fiat currency, from the ads of trustworthy merchants.
 
 It uses Binance's public P2P agent API, which needs no key and is published for automated use
-(https://www.binance.com/en/skills/detail/binance/p2p). It states no rate limit. ``ad-list``
+(https://www.binance.com/en/skills/detail/binance/p2p). It states no rate limit. Binance's terms
+forbid automated access "not purposely provided through Binance Services", and commercial use of
+its market data without consent; this API is provided for it, and the calculator is free.
+Binance blocks some countries, possibly including the server's: check from the server. ``ad-list``
 returns at most 20 ads, cheapest first, and has no filter by amount or by kind of advertiser,
 so both filters are applied here. The ads have no timestamp: they are as of the answer.
 """

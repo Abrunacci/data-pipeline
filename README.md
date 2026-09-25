@@ -60,8 +60,10 @@ hand in [`data/binance_card_quotes.csv`](data/binance_card_quotes.csv):
 | `note` | optional |
 
 The published gap is the median of `1 - final_usdt / list_usdt` over every row, with how many
-rows there are and their first and last dates. The file is checked when the app starts: a row
-with a naive time, a missing column or a final above the list stops it with the line number.
+rows there are and their first and last dates. When a series uses the file (`gap_samples`), it
+is checked when the app starts: a row with a naive time, a wrong number of columns or a final
+above the list stops it with the line number. The file ships inside the image, so new rows take
+a new deploy.
 
 ## Why not Airflow
 

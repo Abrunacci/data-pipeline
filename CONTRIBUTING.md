@@ -110,6 +110,9 @@ A failure in 1–3 tries the next source. A suspect does not: the source did ans
   code of the release before it: add columns and tables, do not rename or drop in the same
   release. Migrations run with a 5 s `lock_timeout`, so one that would block the running app
   fails instead.
+- All pending migrations run in one transaction. To add or change a constraint on a large
+  table, add it `NOT VALID` in one release and `VALIDATE` it in a migration of the next one, so
+  the table is never scanned under an exclusive lock.
 
 ## Tests
 

@@ -45,6 +45,8 @@ jobs:
       - run: uv run ruff format --check .
 
   image:
+    # The weekly run is for the parity tests only.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

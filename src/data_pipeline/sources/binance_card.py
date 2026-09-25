@@ -1,11 +1,14 @@
 """Binance "Buy crypto" with a card: the price Binance lists, which is indicative only.
 
 It uses Binance's public fiat agent API, which needs no key and says "Prices are indicative
-reference rates; execution prices may differ" (https://www.binance.com/en/skills/detail/binance/
-fiat). On 2026-09-25 a real purchase of 10 USD got about 4.3 % less USDT than this price
-promised: the final price is only shown to a logged-in user. Series built on it are marked
-indicative, and the gap is estimated from observed pairs (``core.gap``). The answer has no
-timestamp: it is as of the answer.
+reference rates; execution prices may differ"
+(https://www.binance.com/en/skills/detail/binance/fiat). It states no rate limit; Binance's
+terms are summarized in the P2P source.
+
+On 2026-09-25 a real purchase of 10 USD got about 4.3 % less USDT than this price promised: the
+final price is only shown to a logged-in user. Series built on it are marked indicative, and the
+gap is estimated from observed pairs (``core.gap``). The answer has no timestamp: it is as of
+the answer.
 """
 
 from __future__ import annotations
