@@ -10,7 +10,7 @@ from decimal import Decimal
 from sqlalchemy import Row, Select, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from data_pipeline.core.readings import Accepted, Observation, Rejected, Suspect
+from data_pipeline.core.readings import Accepted, Control, Observation, Rejected, Suspect
 from data_pipeline.runner.store import Latest, Published, SeriesState
 from data_pipeline.storage.tables import PUBLISHED, Status
 from data_pipeline.storage.tables import observations as obs
@@ -30,14 +30,22 @@ class PostgresStore:
     async def record(self, observation: Observation) -> None:
         row: dict[str, object]
         match observation.outcome:
-            case Accepted(reading=reading, confirmed=confirmed):
+            case Accepted(reading=reading, confirmed=confirmed, detail=detail):
                 row = {
                     "status": Status.CONFIRMED if confirmed else Status.ACCEPTED,
                     "value": reading.value,
                     "as_of": reading.as_of,
+                    "detail": detail,
                 }
-            case Suspect(reading=reading):
-                row = {"status": Status.SUSPECT, "value": reading.value, "as_of": reading.as_of}
+            case Suspect(reading=reading, detail=detail):
+                row = {
+                    "status": Status.SUSPECT,
+                    "value": reading.value,
+                    "as_of": reading.as_of,
+                    "detail": detail,
+                }
+            case Control(reading=reading):
+                row = {"status": Status.CONTROL, "value": reading.value, "as_of": reading.as_of}
             case Rejected(reason=reason, detail=detail, reading=reading):
                 row = {
                     "status": Status.REJECTED,
@@ -56,19 +64,21 @@ class PostgresStore:
                 )
             )
 
-    async def state(self, series_id: str) -> SeriesState:
+    async def state(self, series_id: str, since: datetime) -> SeriesState:
         async with self._engine.connect() as connection:
             last = (await connection.execute(_last_published(series_id))).first()
-            since = select(obs.c.value).where(
-                obs.c.series_id == series_id, obs.c.status == Status.SUSPECT
+            suspects = select(obs.c.value).where(
+                obs.c.series_id == series_id,
+                obs.c.status == Status.SUSPECT,
+                obs.c.fetched_at >= since,
             )
             if last is not None:
-                since = since.where(obs.c.id > last.id)
-            result = await connection.execute(since.order_by(obs.c.id))
-            suspects: list[object] = list(result.scalars())
+                suspects = suspects.where(obs.c.id > last.id)
+            result = await connection.execute(suspects.order_by(obs.c.id))
+            values: list[object] = list(result.scalars())
         return SeriesState(
             last_accepted=None if last is None else _decimal(last.value),
-            suspects=[_decimal(value) for value in suspects],
+            suspects=[_decimal(value) for value in values],
         )
 
     async def latest(self, series_id: str) -> Latest:
@@ -76,18 +86,24 @@ class PostgresStore:
         newest_first = obs.c.id.desc()
         async with self._engine.connect() as connection:
             last = (await connection.execute(_last_published(series_id))).first()
-            newest_valid = await connection.scalar(
-                select(obs.c.status)
-                .where(of_series, obs.c.status != Status.REJECTED)
-                .order_by(newest_first)
-                .limit(1)
-            )
+            newest_valid = (
+                await connection.execute(
+                    select(obs.c.status, obs.c.fetched_at)
+                    .where(of_series, obs.c.status.not_in((Status.REJECTED, Status.CONTROL)))
+                    .order_by(newest_first)
+                    .limit(1)
+                )
+            ).first()
             last_attempt_at = await connection.scalar(
                 select(obs.c.fetched_at).where(of_series).order_by(newest_first).limit(1)
             )
         return Latest(
             published=None if last is None else _published(last),
-            pending=newest_valid == Status.SUSPECT,
+            suspect_at=(
+                newest_valid.fetched_at
+                if newest_valid is not None and newest_valid.status == Status.SUSPECT
+                else None
+            ),
             last_attempt_at=last_attempt_at,
         )
 

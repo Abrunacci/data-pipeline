@@ -25,6 +25,8 @@ class Status(StrEnum):
     # An accepted reading that ended a run of suspects.
     CONFIRMED = "confirmed"
     SUSPECT = "suspect"
+    # A reading of the series' control source: recorded, never published.
+    CONTROL = "control"
     REJECTED = "rejected"
 
 
