@@ -69,8 +69,9 @@ Every attempt is recorded with its outcome; nothing is updated or deleted.
    marked as pending confirmation. It is **confirmed**:
    - a jump: at once when the control agrees, or when the two suspects before it jumped the
      same way;
-   - a disagreement with the control: when the two suspects before it are within `max_jump`
-     of it.
+   - a disagreement with the control: when the two suspects before it were also held back
+     for disagreeing and are within `max_jump` of it. Each suspect keeps why it was held back
+     (`reason`: `jump` or `disagreement`).
 
    Suspects older than three intervals expire. A reading back near the last accepted value is
    accepted. These rules are the product owner's; changing them is a product decision.

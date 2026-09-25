@@ -15,6 +15,8 @@ from data_pipeline.core.checks import Range, Rules
 from data_pipeline.core.readings import (
     Accepted,
     Control,
+    Held,
+    HeldBack,
     Observation,
     Outcome,
     Reading,
@@ -52,7 +54,7 @@ async def test_an_empty_series_has_nothing_published(store: PostgresStore) -> No
     assert latest.last_attempt_at is None
     state = await store.state("rate", SINCE)
     assert state.last_accepted is None
-    assert list(state.suspects) == []
+    assert [held.value for held in state.suspects] == []
 
 
 async def test_the_last_accepted_value_is_published_exactly(store: PostgresStore) -> None:
@@ -71,26 +73,26 @@ async def test_the_last_accepted_value_is_published_exactly(store: PostgresStore
 
 
 async def test_state_lists_the_suspects_since_the_last_accepted(store: PostgresStore) -> None:
-    await store.record(at(0, Suspect(reading("1500"), "held back")))
+    await store.record(at(0, Suspect(reading("1500"), HeldBack.JUMP, "held back")))
     await store.record(at(10, Accepted(reading("1600"))))
-    await store.record(at(20, Suspect(reading("1800"), "held back")))
+    await store.record(at(20, Suspect(reading("1800"), HeldBack.JUMP, "held back")))
     await store.record(at(30, Rejected(Rejection.MALFORMED, "html")))
-    await store.record(at(40, Suspect(reading("1801"), "held back")))
+    await store.record(at(40, Suspect(reading("1801"), HeldBack.JUMP, "held back")))
     await store.record(at(50, Accepted(reading("9999"), confirmed=True), series_id="other"))
 
     state = await store.state("rate", SINCE)
     assert state.last_accepted == Decimal(1600)
-    assert list(state.suspects) == [Decimal(1800), Decimal(1801)]
+    assert [held.value for held in state.suspects] == [Decimal(1800), Decimal(1801)]
     assert (await store.latest("rate")).suspect_at == T0 + timedelta(minutes=40)
 
 
 async def test_order_is_the_order_of_recording_not_the_clock(store: PostgresStore) -> None:
     # The server's clock was corrected backwards between the runs.
     await store.record(at(10, Accepted(reading("1600"))))
-    await store.record(at(5, Suspect(reading("1800"), "held back")))
+    await store.record(at(5, Suspect(reading("1800"), HeldBack.JUMP, "held back")))
     state = await store.state("rate", SINCE)
     assert state.last_accepted == Decimal(1600)
-    assert list(state.suspects) == [Decimal(1800)]
+    assert [held.value for held in state.suspects] == [Decimal(1800)]
     await store.record(at(5, Accepted(reading("1700"))))
 
     latest = await store.latest("rate")
@@ -99,19 +101,19 @@ async def test_order_is_the_order_of_recording_not_the_clock(store: PostgresStor
     assert latest.last_attempt_at == T0 + timedelta(minutes=5)
     state = await store.state("rate", SINCE)
     assert state.last_accepted == Decimal(1700)
-    assert list(state.suspects) == []
+    assert [held.value for held in state.suspects] == []
 
 
 async def test_a_confirmed_reading_is_published(store: PostgresStore) -> None:
     await store.record(at(0, Accepted(reading("1600"))))
-    await store.record(at(10, Suspect(reading("1800"), "held back")))
+    await store.record(at(10, Suspect(reading("1800"), HeldBack.JUMP, "held back")))
     await store.record(at(20, Accepted(reading("1801"), confirmed=True)))
 
     latest = await store.latest("rate")
     assert latest.published is not None
     assert latest.published.value == Decimal(1801)
     assert latest.suspect_at is None
-    assert list((await store.state("rate", SINCE)).suspects) == []
+    assert [held.value for held in (await store.state("rate", SINCE)).suspects] == []
 
 
 async def test_a_rejected_reading_keeps_the_value_the_source_sent(
@@ -125,33 +127,57 @@ async def test_a_rejected_reading_keeps_the_value_the_source_sent(
     assert row.reason == "implausible"
 
 
+async def test_why_a_suspect_was_held_is_kept(store: PostgresStore, urls: Urls) -> None:
+    await store.record(at(0, Accepted(reading("1600"))))
+    await store.record(at(10, Suspect(reading("1650"), HeldBack.DISAGREEMENT, "control")))
+    # One written by the release before, without a reason.
+    owner = create_async_engine(urls.owner)
+    async with owner.begin() as connection:
+        await connection.execute(
+            observations.insert().values(
+                series_id="rate",
+                source="s",
+                fetched_at=T0 + timedelta(minutes=20),
+                status="suspect",
+                value=Decimal(1655),
+                as_of=T0 + timedelta(minutes=20),
+            )
+        )
+    await owner.dispose()
+    state = await store.state("rate", SINCE)
+    assert list(state.suspects) == [
+        Held(Decimal(1650), HeldBack.DISAGREEMENT),
+        Held(Decimal(1655), None),
+    ]
+
+
 async def test_expired_suspects_are_left_out(store: PostgresStore) -> None:
     await store.record(at(0, Accepted(reading("1600"))))
-    await store.record(at(10, Suspect(reading("1800"), "held back")))
-    await store.record(at(20, Suspect(reading("1810"), "held back")))
+    await store.record(at(10, Suspect(reading("1800"), HeldBack.JUMP, "held back")))
+    await store.record(at(20, Suspect(reading("1810"), HeldBack.JUMP, "held back")))
     state = await store.state("rate", since=T0 + timedelta(minutes=15))
-    assert list(state.suspects) == [Decimal(1810)]
+    assert [held.value for held in state.suspects] == [Decimal(1810)]
 
 
 async def test_control_readings_are_recorded_and_never_published(store: PostgresStore) -> None:
     # As a run records them: the control first, fetched after the primary, then the decision.
     await store.record(at(0, Accepted(reading("1600"))))
     await store.record(at(11, Control(reading("1601"))))
-    await store.record(at(10, Suspect(reading("1800"), "held back")))
+    await store.record(at(10, Suspect(reading("1800"), HeldBack.JUMP, "held back")))
     latest = await store.latest("rate")
     assert latest.published is not None
     assert latest.published.value == Decimal(1600)
     assert latest.suspect_at == T0 + timedelta(minutes=10)
     # The last recorded attempt, by order of recording.
     assert latest.last_attempt_at == T0 + timedelta(minutes=10)
-    assert list((await store.state("rate", SINCE)).suspects) == [Decimal(1800)]
+    assert [held.value for held in (await store.state("rate", SINCE)).suspects] == [Decimal(1800)]
 
 
 async def test_a_control_recorded_after_a_suspect_does_not_hide_it(store: PostgresStore) -> None:
     # Only if a run stops between its control and its decision, and the next run's control is
     # recorded: the suspect before is still the newest valid reading.
     await store.record(at(0, Accepted(reading("1600"))))
-    await store.record(at(10, Suspect(reading("1800"), "held back")))
+    await store.record(at(10, Suspect(reading("1800"), HeldBack.JUMP, "held back")))
     await store.record(at(21, Control(reading("1601"))))
     assert (await store.latest("rate")).suspect_at == T0 + timedelta(minutes=10)
 

@@ -36,7 +36,8 @@ The series ids are the ones the calculator uses. A Binance card-purchase price i
    value stays published, marked `pending_confirmation`, until the value confirms itself:
    - a jump, at once if the control agrees, or when the next two readings jumped the same
      way (the market moved, even if it keeps moving);
-   - a disagreement, when the next two readings stay within 5 % of it (the value persists).
+   - a disagreement, when the next two readings also disagree with the control and stay
+     within the series' jump limit of it (the value persists).
 
    A real move shows within two more runs; a one-off glitch never does. Held-back values
    expire after three intervals, so an old one cannot confirm a new jump after an outage.

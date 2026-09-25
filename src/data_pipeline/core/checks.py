@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from data_pipeline.core.readings import Accepted, Reading, Rejection, Suspect
+from data_pipeline.core.readings import Accepted, Held, HeldBack, Reading, Rejection, Suspect
 
 # The calculator in cuanto-cuesta accepts prices greater than zero, up to 1,000,000, with at most
 # 8 decimals (frontend/src/calculator/inputs.ts). A published value must be one it accepts.
@@ -132,13 +132,13 @@ def reading_problem(
 def decide(
     reading: Reading,
     last_accepted: Decimal | None,
-    suspects: Sequence[Decimal],
+    suspects: Sequence[Held],
     control: Decimal | None,
     rules: Rules,
 ) -> Accepted | Suspect:
     """Whether a valid reading is published now or held back as a suspect.
 
-    - ``suspects``: the values held back since ``last_accepted`` that have not expired, oldest
+    - ``suspects``: the readings held back since ``last_accepted`` that have not expired, oldest
       first.
     - ``control``: the control source's value this run, or None if the series has none or it
       failed. A control outage never holds a value back.
@@ -149,8 +149,9 @@ def decide(
     - a jump, at once, when the control agrees with it;
     - a jump, when the ``confirmations`` suspects just before it jumped the same way: the market
       moved, even if it keeps moving;
-    - a disagreement with the control, when the ``confirmations`` suspects just before it are
-      within ``max_jump`` of it: the value persists, whatever the control says.
+    - a disagreement with the control, when the ``confirmations`` suspects just before it were
+      also held back for disagreeing and are within ``max_jump`` of it: the value persists,
+      whatever the control says. Jumps do not count here: they say nothing about the control.
     """
     value = reading.value
     if last_accepted is None:
@@ -165,18 +166,19 @@ def decide(
     if jump:
         up = value > last_accepted
 
-        def in_run(suspect: Decimal) -> bool:
-            beyond = not _within(suspect, last_accepted, rules.max_jump)
-            return beyond and (suspect > last_accepted) == up
+        def in_run(suspect: Held) -> bool:
+            beyond = not _within(suspect.value, last_accepted, rules.max_jump)
+            return beyond and (suspect.value > last_accepted) == up
 
-        why = f"jumped from {last_accepted}"
+        held = Suspect(reading, HeldBack.JUMP, f"jumped from {last_accepted}")
         how = "the market kept moving the same way"
     else:
 
-        def in_run(suspect: Decimal) -> bool:
-            return _within(suspect, value, rules.max_jump)
+        def in_run(suspect: Held) -> bool:
+            disagreed = suspect.why is HeldBack.DISAGREEMENT
+            return disagreed and _within(suspect.value, value, rules.max_jump)
 
-        why = f"the control source says {control}"
+        held = Suspect(reading, HeldBack.DISAGREEMENT, f"the control source says {control}")
         how = "the value persisted"
 
     run = 0
@@ -186,7 +188,7 @@ def decide(
         run += 1
     if run >= rules.confirmations:
         return Accepted(reading, confirmed=True, detail=f"{how} for {run + 1} readings")
-    return Suspect(reading, detail=why)
+    return held
 
 
 def _within(value: Decimal, reference: Decimal, fraction: Decimal) -> bool:

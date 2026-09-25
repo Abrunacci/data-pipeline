@@ -9,7 +9,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
 
-from data_pipeline.core.readings import Observation
+from data_pipeline.core.readings import Held, Observation
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +31,7 @@ class SeriesState:
     """
 
     last_accepted: Decimal | None
-    suspects: Sequence[Decimal]
+    suspects: Sequence[Held]
 
 
 @dataclass(frozen=True, slots=True)

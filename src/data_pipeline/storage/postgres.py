@@ -10,7 +10,15 @@ from decimal import Decimal
 from sqlalchemy import Row, Select, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from data_pipeline.core.readings import Accepted, Control, Observation, Rejected, Suspect
+from data_pipeline.core.readings import (
+    Accepted,
+    Control,
+    Held,
+    HeldBack,
+    Observation,
+    Rejected,
+    Suspect,
+)
 from data_pipeline.runner.store import Latest, Published, SeriesState
 from data_pipeline.storage.tables import PUBLISHED, Status
 from data_pipeline.storage.tables import observations as obs
@@ -37,11 +45,12 @@ class PostgresStore:
                     "as_of": reading.as_of,
                     "detail": detail,
                 }
-            case Suspect(reading=reading, detail=detail):
+            case Suspect(reading=reading, why=why, detail=detail):
                 row = {
                     "status": Status.SUSPECT,
                     "value": reading.value,
                     "as_of": reading.as_of,
+                    "reason": why.value,
                     "detail": detail,
                 }
             case Control(reading=reading):
@@ -67,18 +76,17 @@ class PostgresStore:
     async def state(self, series_id: str, since: datetime) -> SeriesState:
         async with self._engine.connect() as connection:
             last = (await connection.execute(_last_published(series_id))).first()
-            suspects = select(obs.c.value).where(
+            suspects = select(obs.c.value, obs.c.reason).where(
                 obs.c.series_id == series_id,
                 obs.c.status == Status.SUSPECT,
                 obs.c.fetched_at >= since,
             )
             if last is not None:
                 suspects = suspects.where(obs.c.id > last.id)
-            result = await connection.execute(suspects.order_by(obs.c.id))
-            values: list[object] = list(result.scalars())
+            rows = (await connection.execute(suspects.order_by(obs.c.id))).all()
         return SeriesState(
             last_accepted=None if last is None else _decimal(last.value),
-            suspects=[_decimal(value) for value in values],
+            suspects=[Held(_decimal(row.value), _held_back(row.reason)) for row in rows],
         )
 
     async def latest(self, series_id: str) -> Latest:
@@ -142,6 +150,11 @@ def _last_published(series_id: str) -> Select[_PublishedRow]:
         .order_by(obs.c.id.desc())
         .limit(1)
     )
+
+
+def _held_back(reason: object) -> HeldBack | None:
+    # Suspects recorded before their reason was kept have none.
+    return None if reason is None else HeldBack(str(reason))
 
 
 def _decimal(value: object) -> Decimal:

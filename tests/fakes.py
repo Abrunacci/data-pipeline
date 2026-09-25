@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from decimal import Decimal
 
-from data_pipeline.core.readings import Accepted, Control, Observation, Rejected, Suspect
+from data_pipeline.core.readings import Accepted, Control, Held, Observation, Rejected, Suspect
 from data_pipeline.runner.store import Latest, Published, SeriesState
 
 
@@ -25,13 +25,13 @@ class MemoryStore:
 
     async def state(self, series_id: str, since: datetime) -> SeriesState:
         last: Decimal | None = None
-        suspects: list[Decimal] = []
+        suspects: list[Held] = []
         for o in self._of(series_id):
             match o.outcome:
                 case Accepted(reading=reading):
                     last, suspects = reading.value, []
-                case Suspect(reading=reading) if o.fetched_at >= since:
-                    suspects.append(reading.value)
+                case Suspect(reading=reading, why=why) if o.fetched_at >= since:
+                    suspects.append(Held(reading.value, why))
                 case Suspect() | Control() | Rejected():
                     pass
         return SeriesState(last_accepted=last, suspects=suspects)

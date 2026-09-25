@@ -13,6 +13,7 @@ from data_pipeline.api.app import HEALTH_TIMEOUT_SECONDS, create_app
 from data_pipeline.config import Settings
 from data_pipeline.core.readings import (
     Accepted,
+    HeldBack,
     Observation,
     Reading,
     Rejected,
@@ -99,7 +100,9 @@ async def test_an_old_rate_is_stale_and_a_suspect_is_pending(
     old = Reading(Decimal(1600), now - timedelta(minutes=31))
     await store.record(Observation("bitso_usdt_ars", "s", old.as_of, Accepted(old)))
     jump = Reading(Decimal(1800), now)
-    await store.record(Observation("bitso_usdt_ars", "s", now, Suspect(jump, "jumped")))
+    await store.record(
+        Observation("bitso_usdt_ars", "s", now, Suspect(jump, HeldBack.JUMP, "jumped"))
+    )
 
     rate = (await client.get("/v1/rates/latest")).json()["rates"]["bitso_usdt_ars"]
     assert rate["value"] == "1600"
@@ -116,7 +119,12 @@ async def test_an_expired_suspect_is_no_longer_pending(
     await store.record(Observation("bitso_usdt_ars", "s", value.as_of, Accepted(value)))
     old = now - timedelta(minutes=31)
     await store.record(
-        Observation("bitso_usdt_ars", "s", old, Suspect(Reading(Decimal(1800), old), "jumped"))
+        Observation(
+            "bitso_usdt_ars",
+            "s",
+            old,
+            Suspect(Reading(Decimal(1800), old), HeldBack.JUMP, "jumped"),
+        )
     )
     rate = (await client.get("/v1/rates/latest")).json()["rates"]["bitso_usdt_ars"]
     assert rate["pending_confirmation"] is False

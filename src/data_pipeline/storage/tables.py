@@ -54,12 +54,18 @@ observations = Table(
     # Exact, with no fixed scale: a rejected value is kept as the source sent it.
     Column("value", Numeric, nullable=True),
     Column("as_of", DateTime(timezone=True), nullable=True),
+    # Why a row was rejected (required) or held back (a suspect's HeldBack; None on the ones
+    # recorded before it was kept). Other rows have none.
     Column("reason", Text, nullable=True),
     Column("detail", Text, nullable=True),
     CheckConstraint(f"status IN ({_sql_list(tuple(Status))})", name="status_known"),
     CheckConstraint("(value IS NULL) = (as_of IS NULL)", name="value_with_as_of"),
     CheckConstraint(
-        f"(status = '{Status.REJECTED}') = (reason IS NOT NULL)", name="reason_only_when_rejected"
+        f"status IN ('{Status.REJECTED}', '{Status.SUSPECT}') OR reason IS NULL",
+        name="reason_only_when_rejected_or_suspect",
+    ),
+    CheckConstraint(
+        f"status <> '{Status.REJECTED}' OR reason IS NOT NULL", name="reason_when_rejected"
     ),
     CheckConstraint(
         f"status = '{Status.REJECTED}' OR value IS NOT NULL", name="value_unless_rejected"

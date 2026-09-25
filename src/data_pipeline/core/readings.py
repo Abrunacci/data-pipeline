@@ -50,12 +50,29 @@ class Accepted:
     detail: str | None = None
 
 
+class HeldBack(StrEnum):
+    """Why a reading was held back."""
+
+    JUMP = "jump"
+    DISAGREEMENT = "disagreement"
+
+
 @dataclass(frozen=True, slots=True)
 class Suspect:
-    """A valid reading held back until it is confirmed; ``detail`` says why."""
+    """A valid reading held back until it is confirmed: ``why``, and ``detail`` in words."""
 
     reading: Reading
+    why: HeldBack
     detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class Held:
+    """A suspect as the next decisions see it. ``why`` is None for one recorded before the
+    reason was kept: it counts as neither."""
+
+    value: Decimal
+    why: HeldBack | None
 
 
 @dataclass(frozen=True, slots=True)
