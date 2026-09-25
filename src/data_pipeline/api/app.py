@@ -102,7 +102,7 @@ def create_app(settings: Settings) -> FastAPI:
     async def latest(store: Annotated[Store, Depends(_store)]) -> LatestRates:
         now = datetime.now(UTC)
         return LatestRates(
-            rates={s.id: latest_rate(await store.latest(s.id), s.rules, now) for s in series}
+            rates={s.id: latest_rate(await store.latest(s.id), s, now) for s in series}
         )
 
     return app

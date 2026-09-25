@@ -11,7 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from data_pipeline.api.app import HEALTH_TIMEOUT_SECONDS, create_app
 from data_pipeline.config import Settings
-from data_pipeline.core.readings import Accepted, Observation, Reading, Suspect
+from data_pipeline.core.readings import (
+    Accepted,
+    Observation,
+    Reading,
+    Rejected,
+    Rejection,
+    Suspect,
+)
 from data_pipeline.storage.postgres import PostgresStore
 from tests.integration.conftest import Urls
 
@@ -39,10 +46,32 @@ async def test_health_checks_the_database(client: httpx.AsyncClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
-async def test_every_series_is_listed_even_without_a_value(client: httpx.AsyncClient) -> None:
+async def test_every_series_is_listed_even_without_a_value(
+    client: httpx.AsyncClient, store: PostgresStore
+) -> None:
+    failed_at = datetime.now(UTC)
+    await store.record(
+        Observation("mep", "dolarapi_mep_compra", failed_at, Rejected(Rejection.MALFORMED, "html"))
+    )
     response = await client.get("/v1/rates/latest")
     assert response.status_code == 200
-    assert response.json() == {"rates": {"bitso_usdt_ars": None}}
+    rates = response.json()["rates"]
+    assert list(rates) == ["mep", "p2p_usdt_usd", "bitso_usdt_ars", "arq_usd_ars"]
+    # No value yet, but the failed attempt shows: it is failing, not waiting to start.
+    assert rates["mep"] == {
+        "value": None,
+        "as_of": None,
+        "fetched_at": None,
+        "source": None,
+        "stale": True,
+        "pending_confirmation": False,
+        "last_attempt_at": failed_at.isoformat().replace("+00:00", "Z"),
+        "official_source": True,
+        "indicative": False,
+        "final_price_gap": None,
+    }
+    assert rates["bitso_usdt_ars"]["last_attempt_at"] is None
+    assert rates["arq_usd_ars"]["official_source"] is False
 
 
 async def test_the_latest_rate_says_when_it_is_from(
@@ -70,12 +99,27 @@ async def test_an_old_rate_is_stale_and_a_suspect_is_pending(
     old = Reading(Decimal(1600), now - timedelta(minutes=31))
     await store.record(Observation("bitso_usdt_ars", "s", old.as_of, Accepted(old)))
     jump = Reading(Decimal(1800), now)
-    await store.record(Observation("bitso_usdt_ars", "s", now, Suspect(jump)))
+    await store.record(Observation("bitso_usdt_ars", "s", now, Suspect(jump, "jumped")))
 
     rate = (await client.get("/v1/rates/latest")).json()["rates"]["bitso_usdt_ars"]
     assert rate["value"] == "1600"
     assert rate["stale"] is True
     assert rate["pending_confirmation"] is True
+
+
+async def test_an_expired_suspect_is_no_longer_pending(
+    client: httpx.AsyncClient, store: PostgresStore
+) -> None:
+    # Bitso runs every 10 minutes, so a suspect expires after 30.
+    now = datetime.now(UTC)
+    value = Reading(Decimal(1600), now - timedelta(minutes=5))
+    await store.record(Observation("bitso_usdt_ars", "s", value.as_of, Accepted(value)))
+    old = now - timedelta(minutes=31)
+    await store.record(
+        Observation("bitso_usdt_ars", "s", old, Suspect(Reading(Decimal(1800), old), "jumped"))
+    )
+    rate = (await client.get("/v1/rates/latest")).json()["rates"]["bitso_usdt_ars"]
+    assert rate["pending_confirmation"] is False
 
 
 async def test_the_calculator_origin_may_read_it(client: httpx.AsyncClient) -> None:
