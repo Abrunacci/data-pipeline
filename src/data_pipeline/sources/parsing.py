@@ -43,7 +43,10 @@ def _json_number(value: object) -> Decimal:
 def _epoch_seconds(value: object) -> datetime:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"expected whole epoch seconds, got {value!r}")
-    return datetime.fromtimestamp(value, tz=UTC)
+    try:
+        return datetime.fromtimestamp(value, tz=UTC)
+    except (OverflowError, OSError) as error:
+        raise ValueError(f"epoch seconds out of range: {value!r}") from error
 
 
 type DecimalText = Annotated[Decimal, BeforeValidator(_decimal_text)]

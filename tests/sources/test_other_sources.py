@@ -124,9 +124,10 @@ class TestBinanceP2P:
             ad("0.93", maxTransAmount="499"),
             ad("0.94", tradableAmount="400"),  # 400 USDT at 0.94 is 376 USD, less than 500
         ]
-        usable = [ad(price) for price in ("1.06", "1.01", "1.05", "1.02", "1.04", "1.03")]
+        usable = [ad(price) for price in ("1.30", "1.01", "1.20", "1.02", "1.04", "1.03")]
         body = f'{{"code": "000000", "data": {{"items": [{", ".join(unusable + usable)}]}}}}'
-        # The five cheapest usable: 1.01 to 1.05, median 1.03.
+        # The five cheapest usable: 1.01, 1.02, 1.03, 1.04, 1.20. Median 1.03 (the mean is
+        # 1.06, and with the unusable ads the median would be 0.92).
         assert self.source.parse(body.encode(), FETCHED_AT).value == Decimal("1.03")
 
     def test_too_few_usable_ads_is_no_quote(self) -> None:
@@ -200,8 +201,12 @@ class TestCriptoYa:
 
     @pytest.mark.parametrize(
         "body",
-        [b'{"bid": "1611.19", "time": 1790369425}', b'{"bid": 1611.19, "time": 1790369425.5}'],
-        ids=["text-bid", "fractional-time"],
+        [
+            b'{"bid": "1611.19", "time": 1790369425}',
+            b'{"bid": 1611.19, "time": 1790369425.5}',
+            b'{"bid": 1611.19, "time": 100000000000000000000}',
+        ],
+        ids=["text-bid", "fractional-time", "time-out-of-range"],
     )
     def test_a_changed_format_is_malformed(self, body: bytes) -> None:
         with pytest.raises(MalformedResponseError):

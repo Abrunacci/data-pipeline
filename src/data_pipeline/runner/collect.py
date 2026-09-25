@@ -3,6 +3,7 @@ and the values before it, and record every attempt."""
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from datetime import datetime
 
@@ -14,6 +15,8 @@ from data_pipeline.core.series import Series
 from data_pipeline.core.sources import MalformedResponseError, NoQuoteError, Source
 from data_pipeline.runner.fetch import FetchError, fetch
 from data_pipeline.runner.store import Store
+
+logger = logging.getLogger(__name__)
 
 type Clock = Callable[[], datetime]
 
@@ -79,6 +82,12 @@ async def _read(
         return fetched_at, Rejected(Rejection.MALFORMED, str(error))
     except NoQuoteError as error:
         return fetched_at, Rejected(Rejection.NO_QUOTE, str(error))
+    except Exception as error:
+        # A bug in a parser, or an answer it did not foresee. It is logged with its traceback
+        # and recorded like a malformed answer, so the run goes on: a broken control never
+        # stops the reading it checks from being decided and recorded.
+        logger.exception("%s failed to parse its answer", source.name)
+        return fetched_at, Rejected(Rejection.MALFORMED, f"{type(error).__name__}: {error}")
 
     age = series.age(reading.as_of, fetched_at)
     if (problem := reading_problem(reading, series.rules, fetched_at, age)) is not None:

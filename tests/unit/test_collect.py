@@ -13,7 +13,7 @@ from data_pipeline.core.checks import Range, Rules
 from data_pipeline.core.readings import Accepted, Control, Reading, Rejected, Rejection, Suspect
 from data_pipeline.core.schedule import OpeningHours
 from data_pipeline.core.series import Series
-from data_pipeline.core.sources import MalformedResponseError, Request
+from data_pipeline.core.sources import MalformedResponseError, Request, Source
 from data_pipeline.runner.collect import collect
 from data_pipeline.runner.scheduler import run_forever, run_slot, slot_start
 from tests.fakes import MemoryStore
@@ -123,16 +123,66 @@ async def test_a_jump_is_held_back_until_two_more_readings_move_the_same_way() -
     assert latest.suspect_at is None
 
 
-async def test_suspects_expire_after_three_intervals() -> None:
+@pytest.mark.parametrize(
+    ("oldest_age", "confirmed"),
+    [(timedelta(minutes=30), True), (timedelta(minutes=30, seconds=1), False)],
+)
+async def test_suspects_expire_after_three_intervals(
+    oldest_age: timedelta, confirmed: bool
+) -> None:
+    # Two suspects, 10 minutes and oldest_age old: the reading confirms only if both are alive,
+    # and a suspect is alive while it is at most 3 intervals (30 minutes) old.
     store = MemoryStore()
-    await run(store, {"primary": [ok("1600")]})
-    later = NOW + timedelta(minutes=10)
-    await run(store, {"primary": [ok("1800")]}, now=later)
-    await run(store, {"primary": [ok("1800")]}, now=later + timedelta(minutes=10))
-    # An outage, then the first reading 31 minutes after the last suspect: they expired.
-    back = later + timedelta(minutes=41)
-    [outcome] = await run(store, {"primary": [ok("1800")]}, now=back)
-    assert isinstance(outcome, Suspect)
+    await run(store, {"primary": [ok("1600")]}, now=NOW - timedelta(hours=1))
+    await run(store, {"primary": [ok("1800")]}, now=NOW - oldest_age)
+    await run(store, {"primary": [ok("1800")]}, now=NOW - timedelta(minutes=10))
+    [outcome] = await run(store, {"primary": [ok("1800")]})
+    assert isinstance(outcome, Accepted) is confirmed
+
+
+MEP_HOURS = OpeningHours(
+    frozenset(range(5)), time(10, 45), time(17, 30), ZoneInfo("America/Argentina/Buenos_Aires")
+)
+FRIDAY_1729 = datetime(2026, 9, 25, 20, 29, tzinfo=UTC)  # 17:29 in Buenos Aires
+
+
+@dataclass(frozen=True)
+class OldSource:
+    """Always answers with a value from Friday 17:29, like a MEP source over a weekend."""
+
+    name: str = "primary"
+
+    def request(self) -> Request:
+        return Request("GET", "https://primary.example/")
+
+    def parse(self, body: bytes, fetched_at: datetime) -> Reading:
+        return Reading(Decimal(body.decode()), FRIDAY_1729)
+
+
+@pytest.mark.parametrize(
+    ("now", "fresh"),
+    [
+        # Monday 10:45: one open minute since Friday 17:29.
+        (datetime(2026, 9, 28, 13, 45, tzinfo=UTC), True),
+        # Monday 11:44: 1 + 59 = 60 open minutes, the limit.
+        (datetime(2026, 9, 28, 14, 44, tzinfo=UTC), True),
+        # Tuesday 10:45: 1 + 405 minutes of Monday.
+        (datetime(2026, 9, 29, 13, 45, tzinfo=UTC), False),
+    ],
+)
+async def test_a_value_ages_only_while_its_market_is_open(now: datetime, fresh: bool) -> None:
+    rules = replace(SERIES.rules, max_age=timedelta(minutes=60))
+    series = replace(SERIES, sources=("primary",), hours=MEP_HOURS, rules=rules)
+    store = MemoryStore()
+    observations = await collect(
+        series, {"primary": OldSource()}, http({"primary": [ok("1550")]}), store, lambda: now
+    )
+    [outcome] = [o.outcome for o in observations]
+    if fresh:
+        assert outcome == Accepted(Reading(Decimal(1550), FRIDAY_1729))
+    else:
+        assert isinstance(outcome, Rejected)
+        assert outcome.reason is Rejection.STALE
 
 
 class TestControl:
@@ -167,6 +217,26 @@ class TestControl:
         assert outcomes == [
             Rejected(Rejection.FETCH_FAILED, "HTTP 404"),
             Accepted(Reading(Decimal(1650), NOW)),
+        ]
+
+    async def test_a_control_that_breaks_its_parser_holds_nothing_back(self) -> None:
+        @dataclass(frozen=True)
+        class Broken:
+            name: str = "control"
+
+            def request(self) -> Request:
+                return Request("GET", "https://control.example/")
+
+            def parse(self, body: bytes, fetched_at: datetime) -> Reading:
+                raise OverflowError("a bug")
+
+        store = MemoryStore()
+        sources: dict[str, Source] = {**SOURCES, "control": Broken()}
+        answers = http({"primary": [ok("1600")], "control": [ok("x")]})
+        observations = await collect(CONTROLLED, sources, answers, store, lambda: NOW)
+        assert [o.outcome for o in observations] == [
+            Rejected(Rejection.MALFORMED, "OverflowError: a bug"),
+            Accepted(Reading(Decimal(1600), NOW)),
         ]
 
     async def test_a_fallback_that_is_the_control_is_not_checked_against_itself(self) -> None:
