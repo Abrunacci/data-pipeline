@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -366,3 +367,43 @@ def _definitions(connection: Connection, schema: str) -> dict[str, object]:
             " WHERE schemaname = :schema AND tablename <> 'alembic_version' ORDER BY 1, 2"
         ),
     }
+
+
+BUENOS_AIRES = ZoneInfo("America/Argentina/Buenos_Aires")
+
+
+async def test_past_values_are_history_not_attempts(store: PostgresStore) -> None:
+    assert not await store.has_history("rate")
+    await store.record(at(0, Accepted(reading("1600"))))
+    past = [reading("1500", -60 * 24 * 2), reading("1550", -60 * 24)]
+    await store.record_history("rate", "history", T0 + timedelta(minutes=5), past)
+    assert await store.has_history("rate")
+    assert not await store.has_history("other")
+    latest = await store.latest("rate")
+    assert latest.published is not None
+    assert latest.published.value == Decimal(1600)
+    assert latest.last_attempt_at == T0
+    assert latest.suspect_at is None
+    # The newest row is a past value stamped 18:05: it is not this slot's attempt.
+    assert not await store.attempted_in(
+        "rate", T0 + timedelta(minutes=5), T0 + timedelta(minutes=10)
+    )
+    assert (await store.state("rate", SINCE)).last_accepted == Decimal(1600)
+
+
+async def test_daily_keeps_the_latest_value_of_each_local_day(store: PostgresStore) -> None:
+    # T0 is 15:00 in Buenos Aires on 2026-09-25.
+    await store.record_history("rate", "history", T0, [reading("1500", -60 * 24)])
+    await store.record(at(0, Accepted(reading("1600", 0))))
+    await store.record(at(10, Accepted(reading("1610", 10))))
+    await store.record(at(20, Suspect(reading("1800", 20), HeldBack.JUMP, "held")))
+    await store.record(at(30, Rejected(Rejection.FETCH_FAILED, "timeout")))
+    # 21:30 in Buenos Aires is 00:30 UTC on the 26th: still the 25th there.
+    await store.record(at(390, Accepted(reading("1620", 390))))
+    days = await store.daily("rate", date(2026, 9, 24), date(2026, 9, 26), BUENOS_AIRES)
+    assert [(day.date, day.value, day.source) for day in days] == [
+        (date(2026, 9, 24), Decimal(1500), "history"),
+        (date(2026, 9, 25), Decimal(1620), "source"),
+    ]
+    only_24 = await store.daily("rate", date(2026, 9, 24), date(2026, 9, 24), BUENOS_AIRES)
+    assert [day.date for day in only_24] == [date(2026, 9, 24)]

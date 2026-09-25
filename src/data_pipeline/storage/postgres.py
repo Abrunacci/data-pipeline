@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import Row, Select, insert, select, text
+from sqlalchemy import Row, Select, func, insert, select, text
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from data_pipeline.core.readings import (
@@ -16,14 +18,18 @@ from data_pipeline.core.readings import (
     Held,
     HeldBack,
     Observation,
+    Reading,
     Rejected,
     Suspect,
 )
-from data_pipeline.runner.store import Latest, Published, SeriesState
-from data_pipeline.storage.tables import PUBLISHED, Status
+from data_pipeline.runner.store import Day, Latest, Published, SeriesState
+from data_pipeline.storage.tables import HISTORY, PUBLISHED, Status
 from data_pipeline.storage.tables import observations as obs
 
 type _PublishedRow = tuple[int, Decimal, datetime, datetime, str]
+
+# Rows that are not a decision on a reading of the schedule.
+_NOT_A_DECISION = (Status.REJECTED, Status.CONTROL, Status.BACKFILL)
 
 
 class PostgresStore:
@@ -97,13 +103,16 @@ class PostgresStore:
             newest_valid = (
                 await connection.execute(
                     select(obs.c.status, obs.c.fetched_at)
-                    .where(of_series, obs.c.status.not_in((Status.REJECTED, Status.CONTROL)))
+                    .where(of_series, obs.c.status.not_in(_NOT_A_DECISION))
                     .order_by(newest_first)
                     .limit(1)
                 )
             ).first()
             last_attempt_at = await connection.scalar(
-                select(obs.c.fetched_at).where(of_series).order_by(newest_first).limit(1)
+                select(obs.c.fetched_at)
+                .where(of_series, obs.c.status != Status.BACKFILL)
+                .order_by(newest_first)
+                .limit(1)
             )
         return Latest(
             published=None if last is None else _published(last),
@@ -115,11 +124,58 @@ class PostgresStore:
             last_attempt_at=last_attempt_at,
         )
 
+    async def record_history(
+        self, series_id: str, source: str, fetched_at: datetime, readings: Sequence[Reading]
+    ) -> None:
+        if not readings:
+            return
+        rows = [
+            {
+                "series_id": series_id,
+                "source": source,
+                "fetched_at": fetched_at,
+                "status": Status.BACKFILL,
+                "value": reading.value,
+                "as_of": reading.as_of,
+            }
+            for reading in readings
+        ]
+        async with self._engine.begin() as connection:
+            await connection.execute(insert(obs), rows)
+
+    async def has_history(self, series_id: str) -> bool:
+        async with self._engine.connect() as connection:
+            found = await connection.scalar(
+                select(obs.c.id)
+                .where(obs.c.series_id == series_id, obs.c.status == Status.BACKFILL)
+                .limit(1)
+            )
+        return found is not None
+
+    async def daily(self, series_id: str, first: date, last: date, zone: ZoneInfo) -> Sequence[Day]:
+        start = datetime.combine(first, time(0), zone)
+        end = datetime.combine(last + timedelta(days=1), time(0), zone)
+        day = func.date(func.timezone(str(zone), obs.c.as_of)).label("day")
+        query = (
+            select(day, obs.c.value, obs.c.as_of, obs.c.source)
+            .ext(distinct_on(day))
+            .where(
+                obs.c.series_id == series_id,
+                obs.c.status.in_(HISTORY),
+                obs.c.as_of >= start,
+                obs.c.as_of < end,
+            )
+            .order_by(day, obs.c.as_of.desc(), obs.c.id.desc())
+        )
+        async with self._engine.connect() as connection:
+            rows = (await connection.execute(query)).all()
+        return [Day(row.day, _decimal(row.value), row.as_of, row.source) for row in rows]
+
     async def attempted_in(self, series_id: str, start: datetime, end: datetime) -> bool:
         async with self._engine.connect() as connection:
             fetched_at = await connection.scalar(
                 select(obs.c.fetched_at)
-                .where(obs.c.series_id == series_id)
+                .where(obs.c.series_id == series_id, obs.c.status != Status.BACKFILL)
                 .order_by(obs.c.id.desc())
                 .limit(1)
             )

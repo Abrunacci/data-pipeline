@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
-from data_pipeline.core.readings import Accepted, Control, Held, Observation, Rejected, Suspect
-from data_pipeline.runner.store import Latest, Published, SeriesState
+from data_pipeline.core.readings import (
+    Accepted,
+    Control,
+    Held,
+    Observation,
+    Reading,
+    Rejected,
+    Suspect,
+)
+from data_pipeline.runner.store import Day, Latest, Published, SeriesState
 
 
 class MemoryStore:
     def __init__(self) -> None:
         self.observations: list[Observation] = []
+        # Past values, kept apart: they are neither attempts nor decisions.
+        self.history: list[tuple[str, str, Reading]] = []
         self.busy: set[str] = set()
 
     async def record(self, observation: Observation) -> None:
@@ -52,6 +63,29 @@ class MemoryStore:
             else None,
             last_attempt_at=history[-1].fetched_at if history else None,
         )
+
+    async def record_history(
+        self, series_id: str, source: str, fetched_at: datetime, readings: Sequence[Reading]
+    ) -> None:
+        self.history.extend((series_id, source, reading) for reading in readings)
+
+    async def has_history(self, series_id: str) -> bool:
+        return any(series == series_id for series, _, _ in self.history)
+
+    async def daily(self, series_id: str, first: date, last: date, zone: ZoneInfo) -> list[Day]:
+        # In recording order, history first as in any real run; the latest as_of wins a day.
+        values = [
+            (source, reading) for series, source, reading in self.history if series == series_id
+        ]
+        for o in self._of(series_id):
+            if isinstance(o.outcome, Accepted):
+                values.append((o.source, o.outcome.reading))
+        by_day: dict[date, Day] = {}
+        for source, reading in values:
+            day = reading.as_of.astimezone(zone).date()
+            if first <= day <= last and (day not in by_day or reading.as_of >= by_day[day].as_of):
+                by_day[day] = Day(day, reading.value, reading.as_of, source)
+        return [by_day[day] for day in sorted(by_day)]
 
     async def attempted_in(self, series_id: str, start: datetime, end: datetime) -> bool:
         history = self._of(series_id)

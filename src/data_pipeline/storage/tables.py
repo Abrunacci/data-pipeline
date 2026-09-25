@@ -28,9 +28,14 @@ class Status(StrEnum):
     # A reading of the series' control source: recorded, never published.
     CONTROL = "control"
     REJECTED = "rejected"
+    # A past value loaded once from a history source: part of the history, never published as
+    # the current value and not an attempt of the schedule.
+    BACKFILL = "backfill"
 
 
 PUBLISHED = (Status.ACCEPTED, Status.CONFIRMED)
+# What the daily history is made of.
+HISTORY = (*PUBLISHED, Status.BACKFILL)
 
 
 def _sql_list(statuses: tuple[Status, ...]) -> str:
@@ -76,5 +81,11 @@ observations = Table(
         "series_id",
         text("id DESC"),
         postgresql_where=text(f"status IN ({_sql_list(PUBLISHED)})"),
+    ),
+    Index(
+        "observations_series_history",
+        "series_id",
+        "as_of",
+        postgresql_where=text(f"status IN ({_sql_list(HISTORY)})"),
     ),
 )

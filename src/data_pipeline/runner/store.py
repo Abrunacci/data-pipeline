@@ -5,11 +5,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
-from data_pipeline.core.readings import Held, Observation
+from data_pipeline.core.readings import Held, Observation, Reading
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +20,16 @@ class Published:
     value: Decimal
     as_of: datetime
     fetched_at: datetime
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
+class Day:
+    """A series on one day: its last published or loaded value of that day."""
+
+    date: date
+    value: Decimal
+    as_of: datetime
     source: str
 
 
@@ -52,6 +63,21 @@ class Store(Protocol):
         ...
 
     async def latest(self, series_id: str) -> Latest: ...
+
+    async def record_history(
+        self, series_id: str, source: str, fetched_at: datetime, readings: Sequence[Reading]
+    ) -> None:
+        """Store past values loaded from a history source, all at once."""
+        ...
+
+    async def has_history(self, series_id: str) -> bool:
+        """Whether past values were ever loaded for the series."""
+        ...
+
+    async def daily(self, series_id: str, first: date, last: date, zone: ZoneInfo) -> Sequence[Day]:
+        """One value per day from ``first`` to ``last`` (days in ``zone``), for the days that
+        have one: the published or loaded value with the latest ``as_of`` of that day."""
+        ...
 
     async def attempted_in(self, series_id: str, start: datetime, end: datetime) -> bool:
         """Whether the last attempt recorded for the series was fetched in ``[start, end)``.
