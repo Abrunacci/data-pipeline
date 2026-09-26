@@ -12,8 +12,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_DOWN, Context, Decimal, localcontext
 from statistics import median
+
+from data_pipeline.core.checks import SMALLEST_STEP
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +56,15 @@ class Gap:
     samples: int
     first: datetime
     last: datetime
+
+
+def estimate_final(listed: Decimal, gap: Gap) -> Decimal:
+    """The final price the gap predicts for a ``listed`` one: ``listed * (1 - gap)``, rounded
+    down to the smallest step a value can have, the project's rule for what a person gets
+    (0.97768597 listed, with the gap of the purchase observed on 2026-09-25, gives
+    0.95453378)."""
+    with localcontext(Context(prec=40, rounding=ROUND_DOWN)):
+        return (listed * (1 - gap.fraction)).quantize(SMALLEST_STEP)
 
 
 def summarize(samples: Sequence[GapSample]) -> Gap | None:

@@ -5,7 +5,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 
 import pytest
 
-from data_pipeline.core.gap import GapSample, summarize
+from data_pipeline.core.gap import GapSample, estimate_final, summarize
 
 WHEN = datetime(2026, 9, 25, 18, 18, tzinfo=UTC)
 
@@ -54,3 +54,13 @@ def test_impossible_observations_are_refused(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         sample(amount, fee, listed, final)
+
+
+def test_the_estimated_final_price_is_rounded_down() -> None:
+    gap = summarize([sample("10", "0.20", "9.7763382", "9.35393217")])
+    assert gap is not None
+    # 0.97768597 * (1 - 0.023676...) = 0.954533789547...: rounded down, not up to ...79.
+    assert estimate_final(Decimal("0.97768597"), gap) == Decimal("0.95453378")
+    # On the observed purchase's own listed price it gives back its final price,
+    # 9.35393217 / 9.80 = 0.95448287..., to the step.
+    assert estimate_final(Decimal("0.97763382"), gap) == Decimal("0.95448287")

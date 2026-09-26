@@ -19,7 +19,6 @@ from datetime import datetime
 from decimal import (
     ROUND_DOWN,
     Context,
-    Decimal,
     DivisionByZero,
     InvalidOperation,
     Overflow,
@@ -29,6 +28,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from data_pipeline.core.checks import SMALLEST_STEP
 from data_pipeline.core.readings import Reading
 from data_pipeline.core.sources import MalformedResponseError, NoQuoteError, Request
 from data_pipeline.sources.parsing import DecimalText, describe, load_json
@@ -60,8 +60,6 @@ class _Answer(BaseModel):
     data: _Data
 
 
-# The calculator accepts prices with at most 8 decimals (core.checks.MAX_DECIMALS).
-EIGHT_DECIMALS = Decimal("0.00000001")
 _INVERSE = Context(prec=40, rounding=ROUND_DOWN, traps=[InvalidOperation, DivisionByZero, Overflow])
 
 
@@ -109,7 +107,7 @@ class BinanceCardPrice:
         # inverts, and the checks reject it. The quotation has no sign: DecimalText refuses one.
         try:
             with localcontext(_INVERSE):
-                per_fiat = (1 / quotation).quantize(EIGHT_DECIMALS)
+                per_fiat = (1 / quotation).quantize(SMALLEST_STEP)
         except ArithmeticError as error:
             raise MalformedResponseError(
                 f"{CARD} quotation {quotation} cannot be inverted"

@@ -64,8 +64,9 @@ estimated from observed pairs, written down by hand in
 
 The published gap is the median over every row of the price gap, fee aside:
 `1 - (final_usdt / (fiat_amount_usd - fee_usd)) / (list_usdt / fiat_amount_usd)`, with how many
-rows there are and their first and last dates. The final price is about
-`value * (1 - percent / 100)`. When a series uses the file (`gap_samples`), it
+rows there are and their first and last dates. The API also publishes `estimated_final`, the
+final price that gap predicts for the current listed price, `value * (1 - gap)`, rounded down
+to 8 decimals: it is what the calculator's card price field asks for. When a series uses the file (`gap_samples`), it
 is checked when the app starts: a row with a naive time, a wrong number of columns, a fee
 below 0 or not below the amount, or a final price (fee aside) better than the listed one stops
 it with the line number. The file ships inside the image, so new rows take
@@ -101,7 +102,8 @@ What Airflow would give is built in:
       "last_attempt_at": "2026-09-25T21:04:24.919489Z",
       "official_source": false,
       "indicative": false,
-      "final_price_gap": null
+      "final_price_gap": null,
+      "estimated_final": null
     }
   }
 }
@@ -114,7 +116,9 @@ What Airflow would give is built in:
 - `pending_confirmation`: a newer reading is held back and may replace this value soon.
 - `official_source: false`: the value comes from an undocumented source.
 - `indicative`: a reference price, not what a trade gets; `final_price_gap` (`percent`,
-  `samples`, `first`, `last`) says how much less a trade got, when there are observations.
+  `samples`, `first`, `last`) says how much worse a trade's price was, fee aside, when there
+  are observations, and `estimated_final` is the price that predicts now. Both are `null`
+  for a series without observations.
 
 `GET /v1/rates/{id}/history?from=2026-09-24&to=2026-09-25`
 

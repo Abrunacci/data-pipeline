@@ -19,6 +19,8 @@ from data_pipeline.core.readings import Accepted, Held, HeldBack, Reading, Rejec
 # 8 decimals (frontend/src/calculator/inputs.ts). A published value must be one it accepts.
 MAX_VALUE = Decimal(1_000_000)
 MAX_DECIMALS = 8
+# The smallest step a published value can have: 0.00000001.
+SMALLEST_STEP = Decimal(1).scaleb(-MAX_DECIMALS)
 
 # Clocks differ a little between a source and this server; more than this is a wrong timestamp.
 CLOCK_SKEW = timedelta(minutes=5)

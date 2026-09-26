@@ -58,6 +58,12 @@ def test_the_gap_is_published_in_percent() -> None:
     assert rate.final_price_gap is not None
     assert rate.final_price_gap.percent == "4.32"
     assert rate.final_price_gap.samples == 3
+    # 1550 * (1 - 0.04320459) = 1483.0328855, rounded down to 8 decimals.
+    assert rate.estimated_final == "1483.0328855"
+    bitso = SERIES["bitso_usdt_ars"]
+    assert latest_rate(published(FRIDAY_CLOSE), bitso, FRIDAY_CLOSE).estimated_final is None
+    no_value = Latest(None, None, None)
+    assert latest_rate(no_value, indicative, FRIDAY_CLOSE).estimated_final is None
     local = datetime(2026, 9, 25, 15, 18, tzinfo=timezone(timedelta(hours=-3)))
     in_utc = replace(indicative, gap=replace(gap, first=local, last=local))
     shown = latest_rate(published(FRIDAY_CLOSE), in_utc, FRIDAY_CLOSE).final_price_gap

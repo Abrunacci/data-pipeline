@@ -10,7 +10,8 @@ from typing import Literal
 from fastapi import HTTPException, status
 from pydantic import BaseModel
 
-from data_pipeline.core.gap import Gap
+from data_pipeline.core.checks import canonical
+from data_pipeline.core.gap import Gap, estimate_final
 from data_pipeline.core.series import Series
 from data_pipeline.runner.store import Day, Latest
 
@@ -39,7 +40,9 @@ class Rate(BaseModel):
     - ``last_attempt_at``: the last time any source was asked, whatever the result.
     - ``official_source``: False when the value comes from an undocumented source.
     - ``indicative``: a reference price, not what a trade gets; ``final_price_gap`` says how
-      much less a trade got, when there are observations.
+      much worse the price a trade got was, when there are observations, and
+      ``estimated_final`` is the price that predicts for a trade now: ``value * (1 - gap)``,
+      rounded down. Both are null otherwise.
     """
 
     value: str | None
@@ -52,6 +55,7 @@ class Rate(BaseModel):
     official_source: bool
     indicative: bool
     final_price_gap: FinalPriceGap | None
+    estimated_final: str | None
 
 
 class LatestRates(BaseModel):
@@ -133,6 +137,12 @@ def latest_rate(latest: Latest, series: Series, now: datetime) -> Rate:
         official_source=series.official_source,
         indicative=series.indicative,
         final_price_gap=None if series.gap is None else _gap(series.gap),
+        estimated_final=(
+            None
+            if published is None or series.gap is None
+            # Without trailing zeros, like every value the API publishes.
+            else format(canonical(estimate_final(published.value, series.gap)), "f")
+        ),
     )
 
 
