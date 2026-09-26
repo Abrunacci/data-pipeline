@@ -40,7 +40,13 @@ def test_the_repo_series_file_loads() -> None:
         s.id: s
         for s in load_series(DEFAULT_SERIES_FILE, available_sources(), available_history_sources())
     }
-    assert list(series) == ["mep", "p2p_usdt_usd", "bitso_usdt_ars", "arq_usd_ars"]
+    assert list(series) == [
+        "mep",
+        "binance_p2p_usdt_usd",
+        "bitso_usdt_ars",
+        "arq_usd_ars",
+        "binance_card_usd_usdt",
+    ]
     mep = series["mep"]
     assert mep.control == "ambito_mep"
     assert mep.hours is not None
@@ -49,10 +55,14 @@ def test_the_repo_series_file_loads() -> None:
     assert not mep.runs_at(datetime(2026, 9, 26, 15, 0, tzinfo=UTC))
     assert series["bitso_usdt_ars"].rules.max_jump == Decimal("0.05")
     assert series["bitso_usdt_ars"].rules.control_within == Decimal("0.015")
-    assert series["p2p_usdt_usd"].every == timedelta(minutes=10)
+    assert series["binance_p2p_usdt_usd"].every == timedelta(minutes=10)
     assert not series["arq_usd_ars"].official_source
     assert all(s.official_source for s in series.values() if s.id != "arq_usd_ars")
-    assert not any(s.indicative for s in series.values())
+    card = series["binance_card_usd_usdt"]
+    assert [s.id for s in series.values() if s.indicative] == [card.id]
+    # The repo's observed pairs; the file grows, so only that there are some.
+    assert card.gap is not None
+    assert card.gap.samples >= 1
 
 
 def test_decimals_are_read_from_their_text(tmp_path: Path) -> None:
@@ -116,7 +126,7 @@ CARD = """
 series:
   - id: card_test
     description: test
-    sources: [binance_card_usdt_usd_list]
+    sources: [binance_card_usd_usdt_list]
     every_minutes: 10
     plausible: {min: 0.5, max: 2}
     max_age_minutes: 30
@@ -130,7 +140,9 @@ SAMPLES_HEADER = "observed_at,fiat_amount_usd,list_usdt,final_usdt,fee_usd,note\
 def test_an_indicative_series_reads_its_gap_from_observed_pairs(tmp_path: Path) -> None:
     (tmp_path / "samples.csv").write_text(
         SAMPLES_HEADER
-        # 1 - 9.35393217 / 9.7763 = 0.04320...; 1 - 95 / 100 = 0.05; 1 - 97 / 100 = 0.03.
+        # The price gap, fee aside, is 1 - (final / (amount - fee)) / (list / amount):
+        # 1 - (9.35393217 / 9.80) / (9.7763 / 10) = 0.0236...; made-up rows for the test:
+        # 1 - (95 / 98) / (100 / 100) = 0.0306...; 1 - (97 / 98) / 1 = 0.0102...
         + "2026-09-25T15:10:00-03:00,10,9.7763,9.35393217,0.20,\n"
         + "2026-09-28T12:00:00-03:00,100,100,95,2,made up for the test\n"
         + "2026-09-29T12:00:00-03:00,100,100,97,2,\n"
@@ -139,7 +151,8 @@ def test_an_indicative_series_reads_its_gap_from_observed_pairs(tmp_path: Path) 
     assert series.indicative
     assert series.gap is not None
     assert series.gap.samples == 3
-    assert series.gap.fraction == 1 - Decimal("9.35393217") / Decimal("9.7763")
+    expected = 1 - (Decimal("9.35393217") / Decimal("9.80")) / (Decimal("9.7763") / 10)
+    assert series.gap.fraction == expected
     assert series.gap.first == datetime(2026, 9, 25, 18, 10, tzinfo=UTC)
     assert series.gap.last == datetime(2026, 9, 29, 15, 0, tzinfo=UTC)
 
@@ -155,12 +168,13 @@ def test_no_observed_pairs_means_no_gap(tmp_path: Path) -> None:
     [
         ("observed_at,amount\n", "expected columns"),
         (SAMPLES_HEADER + "2026-09-25T15:10:00,10,9.77,9.35,0.2,\n", "timezone-aware"),
-        (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,9.35,9.77,0.2,\n", "more than listed"),
+        (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,9.35,9.77,0.2,\n", "better than"),
+        (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,9.77,9.35,10,\n", "less than the amount"),
         (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,abc,9.35,0.2,\n", r"samples.csv:2"),
         (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,9.77,9.35,0.2,a, b\n", "6 columns"),
         (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,9.77,9.35\n", "6 columns"),
         (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,Infinity,9.35,0.2,\n", "finite"),
-        (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,9.77,9.35,-1,\n", "fee_usd"),
+        (SAMPLES_HEADER + "2026-09-25T15:10:00-03:00,10,9.77,9.35,-1,\n", "fee must be"),
     ],
 )
 def test_observed_pairs_mistakes_are_config_errors(

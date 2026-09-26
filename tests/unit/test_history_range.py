@@ -41,9 +41,14 @@ def test_dates_outside_the_history_are_refused(first: date | None, last: date | 
     with pytest.raises(HTTPException) as error:
         history_range(first, last, TODAY)
     assert error.value.detail == "date_out_of_range"
+
+
+def test_the_first_day_and_tomorrow_are_inside_the_history() -> None:
     # Up to tomorrow is fine: it may already be tomorrow somewhere.
     assert history_range(date(2000, 1, 1), date(2000, 1, 1), TODAY).first == date(2000, 1, 1)
     assert history_range(None, date(2026, 9, 26), TODAY).last == date(2026, 9, 26)
+    # The default start never goes before the first day.
+    assert history_range(None, date(2000, 1, 5), TODAY).first == date(2000, 1, 1)
 
 
 def test_from_after_to_is_refused() -> None:

@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from data_pipeline.core.checks import value_problem
+from data_pipeline.core.readings import Rejection
 from data_pipeline.core.sources import MalformedResponseError, NoQuoteError
 from data_pipeline.sources import available_sources
 from data_pipeline.sources.ambito import AmbitoMep
@@ -216,12 +218,51 @@ class TestCriptoYa:
 class TestBinanceCard:
     source = BinanceCardPrice()
 
-    def test_reads_the_card_price_as_of_the_answer(self) -> None:
-        # Recorded: BUY_PAYMONADE_CARD quotation "1.02282331" USD per USDT (9.7769 USDT for 10).
+    def test_reads_the_card_price_in_usdt_per_usd_as_of_the_answer(self) -> None:
+        # Recorded: BUY_PAYMONADE_CARD quotation "1.02282331" USD per USDT, and for the minimum
+        # of 10 USD, cryptoMinLimit "9.7768597" USDT. 1 / 1.02282331 = 0.977685978..., rounded
+        # down to 8 decimals: 0.97768597, what Binance shows.
         body = fixture("binance_fiat_payment_methods_buy_usd_usdt_ar.json")
         reading = self.source.parse(body, FETCHED_AT)
-        assert reading.value == Decimal("1.02282331")
+        assert self.source.name == "binance_card_usd_usdt_list"
+        assert reading.value == Decimal("0.97768597")
         assert reading.as_of == FETCHED_AT
+
+    def with_quotation(self, quotation: str) -> bytes:
+        data = json.loads(fixture("binance_fiat_payment_methods_buy_usd_usdt_ar.json"))
+        for method in data["data"]["paymentMethods"]:
+            if method["code"] == "BUY_PAYMONADE_CARD":
+                method["quotation"] = quotation
+        return json.dumps(data).encode()
+
+    @pytest.mark.parametrize("quotation", ["0", "0.000"])
+    def test_a_zero_quotation_is_malformed(self, quotation: str) -> None:
+        with pytest.raises(MalformedResponseError, match="zero"):
+            self.source.parse(self.with_quotation(quotation), FETCHED_AT)
+
+    def test_a_quotation_too_small_to_invert_is_malformed(self) -> None:
+        # 1 / 1e-33 to 8 decimals needs 42 digits, more than the 40 the inversion keeps.
+        with pytest.raises(MalformedResponseError, match="cannot be inverted"):
+            self.source.parse(self.with_quotation("0." + "0" * 32 + "1"), FETCHED_AT)
+
+    def test_an_absurd_quotation_inverts_exactly_and_the_checks_refuse_it(self) -> None:
+        # 1 / 1e-28 = 1e28: no crash; value_problem then rejects it as too large.
+        reading = self.source.parse(self.with_quotation("0." + "0" * 27 + "1"), FETCHED_AT)
+        assert reading.value == Decimal(10) ** 28
+        problem = value_problem(reading.value)
+        assert problem is not None
+        assert problem[0] is Rejection.TOO_LARGE
+
+    def test_the_inverse_is_rounded_down(self) -> None:
+        # 1 / 3 = 0.333333333...; 1 / 1.5 = 0.666666666... rounds down, not up to ...67.
+        for quotation, expected in (("3", "0.33333333"), ("1.5", "0.66666666")):
+            name = "binance_fiat_payment_methods_buy_usd_usdt_ar.json"
+            data = json.loads(fixture(name))
+            for method in data["data"]["paymentMethods"]:
+                if method["code"] == "BUY_PAYMONADE_CARD":
+                    method["quotation"] = quotation
+            reading = self.source.parse(json.dumps(data).encode(), FETCHED_AT)
+            assert reading.value == Decimal(expected)
 
     def test_a_missing_or_suspended_card_method_is_no_quote(self) -> None:
         name = "binance_fiat_payment_methods_buy_usd_usdt_ar.json"

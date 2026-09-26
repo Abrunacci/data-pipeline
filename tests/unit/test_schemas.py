@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 from data_pipeline.api.schemas import latest_rate
@@ -50,7 +50,7 @@ def test_a_suspect_is_pending_while_it_is_at_most_three_intervals_old() -> None:
 
 
 def test_the_gap_is_published_in_percent() -> None:
-    card = SERIES["p2p_usdt_usd"]
+    card = SERIES["binance_card_usd_usdt"]
     gap = Gap(Decimal("0.04320459"), 3, FRIDAY_CLOSE, FRIDAY_CLOSE + timedelta(days=4))
     indicative = replace(card, indicative=True, gap=gap)
     rate = latest_rate(published(FRIDAY_CLOSE), indicative, FRIDAY_CLOSE)
@@ -58,3 +58,9 @@ def test_the_gap_is_published_in_percent() -> None:
     assert rate.final_price_gap is not None
     assert rate.final_price_gap.percent == "4.32"
     assert rate.final_price_gap.samples == 3
+    local = datetime(2026, 9, 25, 15, 18, tzinfo=timezone(timedelta(hours=-3)))
+    in_utc = replace(indicative, gap=replace(gap, first=local, last=local))
+    shown = latest_rate(published(FRIDAY_CLOSE), in_utc, FRIDAY_CLOSE).final_price_gap
+    assert shown is not None
+    assert shown.first.tzinfo is UTC
+    assert shown.first == local

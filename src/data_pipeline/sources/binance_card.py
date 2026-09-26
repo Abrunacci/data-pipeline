@@ -5,16 +5,26 @@ reference rates; execution prices may differ"
 (https://www.binance.com/en/skills/detail/binance/fiat). It states no rate limit; Binance's
 terms are summarized in the P2P source.
 
-On 2026-09-25 a real purchase of 10 USD got about 4.3 % less USDT than this price promised: the
-final price is only shown to a logged-in user. Series built on it are marked indicative, and the
-gap is estimated from observed pairs (``core.gap``). The answer has no timestamp: it is as of
-the answer.
+On 2026-09-25 a real purchase of 10 USD got 4.3 % less USDT than this price promised: a 2 %
+fee, which the calculator charges on its own, and a price 2.37 % worse than listed. The final
+price is only shown to a logged-in user. Series built on it are marked indicative, and the
+price gap is estimated from observed pairs (``core.gap``). The answer has no timestamp: it is
+as of the answer.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import (
+    ROUND_DOWN,
+    Context,
+    Decimal,
+    DivisionByZero,
+    InvalidOperation,
+    Overflow,
+    localcontext,
+)
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -50,10 +60,19 @@ class _Answer(BaseModel):
     data: _Data
 
 
+# The calculator accepts prices with at most 8 decimals (core.checks.MAX_DECIMALS).
+EIGHT_DECIMALS = Decimal("0.00000001")
+_INVERSE = Context(prec=40, rounding=ROUND_DOWN, traps=[InvalidOperation, DivisionByZero, Overflow])
+
+
 @dataclass(frozen=True, slots=True)
 class BinanceCardPrice:
-    """How many ``fiat`` Binance lists for each ``crypto`` bought with a card in ``country``:
-    ``quotation``, e.g. 1.0228 USD per USDT."""
+    """How much ``crypto`` Binance lists for each ``fiat`` paid with a card in ``country``.
+
+    Binance quotes the other way round (``quotation``: 1.02282331 USD per USDT). The inverse
+    has endless decimals, so it is rounded down to 8, the project's rule for what a person
+    gets: 0.97768597 USDT per USD, as Binance itself shows for 10 USD (9.7768597 USDT).
+    """
 
     fiat: str = "USD"
     crypto: str = "USDT"
@@ -61,7 +80,7 @@ class BinanceCardPrice:
 
     @property
     def name(self) -> str:
-        return f"binance_card_{self.crypto.lower()}_{self.fiat.lower()}_list"
+        return f"binance_card_{self.fiat.lower()}_{self.crypto.lower()}_list"
 
     def request(self) -> Request:
         return Request(
@@ -80,4 +99,19 @@ class BinanceCardPrice:
             raise NoQuoteError(f"no {CARD} among {[method.code for method in methods]}")
         if cards[0].suspended:
             raise NoQuoteError(f"{CARD} is suspended")
-        return Reading(cards[0].quotation, fetched_at)
+        quotation = cards[0].quotation
+        if quotation == 0:
+            raise MalformedResponseError(f"{CARD} quotation is zero")
+        # Its own context, so the result does not depend on the thread's. Truncating the
+        # quotient at 40 significant digits and then at 8 decimals gives the same result as
+        # truncating the exact quotient once, whenever the result fits in 40 digits. One that
+        # does not (a quotation below about 1e-32) is malformed; a merely absurd one (1e-28)
+        # inverts, and the checks reject it. The quotation has no sign: DecimalText refuses one.
+        try:
+            with localcontext(_INVERSE):
+                per_fiat = (1 / quotation).quantize(EIGHT_DECIMALS)
+        except ArithmeticError as error:
+            raise MalformedResponseError(
+                f"{CARD} quotation {quotation} cannot be inverted"
+            ) from error
+        return Reading(per_fiat, fetched_at)

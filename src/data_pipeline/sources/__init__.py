@@ -6,8 +6,9 @@ from collections.abc import Mapping
 from datetime import time
 from decimal import Decimal
 
+from data_pipeline.core.schedule import BUENOS_AIRES
 from data_pipeline.core.sources import HistorySource, Source
-from data_pipeline.sources.ambito import BUENOS_AIRES, AmbitoMep
+from data_pipeline.sources.ambito import AmbitoMep
 from data_pipeline.sources.argentinadatos import ArgentinaDatosDaily
 from data_pipeline.sources.arq import ArqBid
 from data_pipeline.sources.binance_card import BinanceCardPrice

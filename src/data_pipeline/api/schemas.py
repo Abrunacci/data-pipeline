@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Literal
-from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
@@ -17,8 +16,9 @@ from data_pipeline.runner.store import Day, Latest
 
 
 class FinalPriceGap(BaseModel):
-    """How much less a trade got than the indicative price, from observed pairs: the median of
-    ``samples`` observations between ``first`` and ``last``. ``percent`` 4.32 is 4.32 %."""
+    """How much worse the final price was than the indicative one, fee aside, from observed
+    pairs: the median of ``samples`` observations between ``first`` and ``last``. ``percent``
+    2.37 is 2.37 %: the final price is about ``value * (1 - percent / 100)``."""
 
     percent: str
     samples: int
@@ -60,8 +60,7 @@ class LatestRates(BaseModel):
     rates: dict[str, Rate]
 
 
-# Days of the history are days in Buenos Aires: the calculator's users' days.
-HISTORY_ZONE = ZoneInfo("America/Argentina/Buenos_Aires")
+# Days of the history are days in Buenos Aires (core.schedule.BUENOS_AIRES).
 DEFAULT_HISTORY_DAYS = 30
 MAX_HISTORY_DAYS = 400
 # No series has values before this; it also keeps date arithmetic far from date.min.
@@ -100,7 +99,8 @@ def history_range(first: date | None, last: date | None, today: date) -> DayRang
     for day in (first, last):
         if day is not None and not EARLIEST_HISTORY_DAY <= day <= today + timedelta(days=1):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "date_out_of_range")
-    first = last - timedelta(days=DEFAULT_HISTORY_DAYS - 1) if first is None else first
+    if first is None:
+        first = max(last - timedelta(days=DEFAULT_HISTORY_DAYS - 1), EARLIEST_HISTORY_DAY)
     if first > last:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "from_after_to")
     if (last - first).days + 1 > MAX_HISTORY_DAYS:
@@ -141,6 +141,7 @@ def _gap(gap: Gap) -> FinalPriceGap:
         # Display only: two decimals, half to even. The exact fraction stays in the series.
         percent=format((gap.fraction * 100).quantize(Decimal("0.01"), ROUND_HALF_EVEN), "f"),
         samples=gap.samples,
-        first=gap.first,
-        last=gap.last,
+        # In UTC, like every other time the API returns.
+        first=gap.first.astimezone(UTC),
+        last=gap.last.astimezone(UTC),
     )

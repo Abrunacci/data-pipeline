@@ -10,9 +10,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from data_pipeline.api.schemas import HISTORY_ZONE
 from data_pipeline.config import DEFAULT_SERIES_FILE, load_series
 from data_pipeline.core.readings import Reading
+from data_pipeline.core.schedule import BUENOS_AIRES
 from data_pipeline.core.sources import MalformedResponseError, Request
 from data_pipeline.runner.backfill import backfill
 from data_pipeline.runner.scheduler import run_series
@@ -23,7 +23,7 @@ from tests.fakes import MemoryStore
 pytestmark = pytest.mark.anyio
 
 FIXTURE = Path(__file__).parents[1] / "sources" / "fixtures" / "argentinadatos_bolsa_trimmed.json"
-SOURCE = ArgentinaDatosDaily("bolsa", "compra", time(17, 0), HISTORY_ZONE)
+SOURCE = ArgentinaDatosDaily("bolsa", "compra", time(17, 0), BUENOS_AIRES)
 MEP = next(
     s
     for s in load_series(DEFAULT_SERIES_FILE, available_sources(), available_history_sources())
@@ -73,7 +73,7 @@ async def test_loads_past_open_days_once() -> None:
     # Of the 8 rows: 2026-09-20 is a Sunday and 2026-09-25 is today; 6 are kept, including the
     # 2018 ones, which the plausible range for today's prices would refuse.
     assert loaded == 6
-    days = await store.daily("mep", date(2018, 1, 1), date(2026, 9, 25), HISTORY_ZONE)
+    days = await store.daily("mep", date(2018, 1, 1), date(2026, 9, 25), BUENOS_AIRES)
     assert [day.date for day in days] == [
         date(2018, 10, 29),
         date(2018, 10, 30),

@@ -13,12 +13,12 @@ source says it is from.
 | Series | Value | Source → control | Every |
 |---|---|---|---|
 | `mep` | ARS paid for each USD sold through the MEP (buy side) | [DolarApi](https://dolarapi.com/docs/argentina/operations/get-dolar-bolsa.html) → Ámbito | 15 min, weekdays 10:45–17:30 Buenos Aires |
-| `p2p_usdt_usd` | USD paid for each USDT on Binance P2P: median of the 5 cheapest merchant ads that take 500 USD, from merchants with 95 % of orders completed | [Binance P2P public API](https://www.binance.com/en/skills/detail/binance/p2p) | 10 min |
+| `binance_p2p_usdt_usd` | USD paid for each USDT on Binance P2P: median of the 5 cheapest merchant ads that take 500 USD, from merchants with 95 % of orders completed | [Binance P2P public API](https://www.binance.com/en/skills/detail/binance/p2p) | 10 min |
 | `bitso_usdt_ars` | ARS paid for each USDT sold on Bitso (best bid) | [Bitso public API](https://docs.bitso.com/bitso-api/docs/ticker) → CriptoYa | 10 min |
+| `binance_card_usd_usdt` | USDT Binance lists for each USD paid with a card: **indicative**, with `final_price_gap` | [Binance fiat public API](https://www.binance.com/en/skills/detail/binance/fiat) | 10 min |
 | `arq_usd_ars` | ARS ARQ pays for each USDc, at par with USD (its bid) | ARQ's ticker (undocumented, so `official_source: false`), CriptoYa as fallback → CriptoYa | 10 min |
 
-The series ids are the ones the calculator uses. A Binance card-purchase price is ready to add
-(`binance_card_usdt_usd_list`) once the calculator defines its id; see
+The series ids are the ones the calculator uses. For the card price, see
 [Card price gap](#card-price-gap).
 
 ## How a value gets published
@@ -47,9 +47,11 @@ Every attempt is stored with its outcome and reason, so the history shows the fa
 ## Card price gap
 
 Binance lists a price for buying USDT with a card, but the final screen gives less: on
-2026-09-25, 10 USD bought 9.35393217 USDT against 9.7763 listed, 4.3 % less. The final price
-is only shown to a logged-in user, so the gap is estimated from observed pairs, written down by
-hand in [`data/binance_card_quotes.csv`](data/binance_card_quotes.csv):
+2026-09-25, 10 USD bought 9.35393217 USDT against 9.7763382 listed. Part of that is the fee
+(0.20 USD, which the calculator charges on its own as `binance_card_purchase`); the rest, 2.37 %,
+is a worse price. The final price is only shown to a logged-in user, so that price gap is
+estimated from observed pairs, written down by hand in
+[`data/binance_card_quotes.csv`](data/binance_card_quotes.csv):
 
 | Column | Meaning |
 |---|---|
@@ -57,13 +59,16 @@ hand in [`data/binance_card_quotes.csv`](data/binance_card_quotes.csv):
 | `fiat_amount_usd` | the amount paid, in USD |
 | `list_usdt` | the USDT the payment-method list promised for that amount |
 | `final_usdt` | the USDT the final screen gave, after every fee |
-| `fee_usd` | the fee the final screen showed, for the record |
+| `fee_usd` | the fee the final screen showed, in USD |
 | `note` | optional |
 
-The published gap is the median of `1 - final_usdt / list_usdt` over every row, with how many
-rows there are and their first and last dates. When a series uses the file (`gap_samples`), it
-is checked when the app starts: a row with a naive time, a wrong number of columns or a final
-above the list stops it with the line number. The file ships inside the image, so new rows take
+The published gap is the median over every row of the price gap, fee aside:
+`1 - (final_usdt / (fiat_amount_usd - fee_usd)) / (list_usdt / fiat_amount_usd)`, with how many
+rows there are and their first and last dates. The final price is about
+`value * (1 - percent / 100)`. When a series uses the file (`gap_samples`), it
+is checked when the app starts: a row with a naive time, a wrong number of columns, a fee
+below 0 or not below the amount, or a final price (fee aside) better than the listed one stops
+it with the line number. The file ships inside the image, so new rows take
 a new deploy.
 
 ## Why not Airflow
