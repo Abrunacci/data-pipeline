@@ -102,8 +102,11 @@ class BinanceCardPrice:
         quotation = cards[0].quotation
         if quotation == 0:
             raise MalformedResponseError(f"{CARD} quotation is zero")
-        # Its own context, so the result does not depend on the thread's: 40 digits hold the
-        # exact inverse of any quotation to 8 decimals, and the checks reject absurd ones.
+        # Its own context, so the result does not depend on the thread's. Truncating the
+        # quotient at 40 significant digits and then at 8 decimals gives the same result as
+        # truncating the exact quotient once, whenever the result fits in 40 digits. One that
+        # does not (a quotation below about 1e-32) is malformed; a merely absurd one (1e-28)
+        # inverts, and the checks reject it. The quotation has no sign: DecimalText refuses one.
         try:
             with localcontext(_INVERSE):
                 per_fiat = (1 / quotation).quantize(EIGHT_DECIMALS)
