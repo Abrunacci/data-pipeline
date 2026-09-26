@@ -241,9 +241,14 @@ class TestBinanceCard:
             self.source.parse(self.with_quotation(quotation), FETCHED_AT)
 
     def test_a_quotation_too_small_to_invert_is_malformed(self) -> None:
-        # 1 / 1e-33 to 8 decimals needs 42 digits, more than the 40 the inversion keeps.
+        # 1 / 1e-32 to 8 decimals needs 41 digits, one more than the 40 the inversion keeps.
         with pytest.raises(MalformedResponseError, match="cannot be inverted"):
-            self.source.parse(self.with_quotation("0." + "0" * 32 + "1"), FETCHED_AT)
+            self.source.parse(self.with_quotation("0." + "0" * 31 + "1"), FETCHED_AT)
+        # Just above it the inverse fits: 99999990000000999999900000009999.99900000.
+        just_above = self.with_quotation("0." + "0" * 31 + "10000001")
+        assert self.source.parse(just_above, FETCHED_AT).value == Decimal(
+            "99999990000000999999900000009999.999"
+        )
 
     def test_an_absurd_quotation_inverts_exactly_and_the_checks_refuse_it(self) -> None:
         # 1 / 1e-28 = 1e28: no crash; value_problem then rejects it as too large.

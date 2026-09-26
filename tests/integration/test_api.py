@@ -66,6 +66,8 @@ async def test_every_series_is_listed_even_without_a_value(
     ]
     assert rates["binance_card_usd_usdt"]["indicative"] is True
     assert rates["binance_card_usd_usdt"]["final_price_gap"]["samples"] >= 1
+    # No value yet, so no estimate either.
+    assert rates["binance_card_usd_usdt"]["estimated_final"] is None
     # No value yet, but the failed attempt shows: it is failing, not waiting to start.
     assert rates["mep"] == {
         "value": None,
@@ -78,6 +80,7 @@ async def test_every_series_is_listed_even_without_a_value(
         "official_source": True,
         "indicative": False,
         "final_price_gap": None,
+        "estimated_final": None,
     }
     assert rates["bitso_usdt_ars"]["last_attempt_at"] is None
     assert rates["arq_usd_ars"]["official_source"] is False
