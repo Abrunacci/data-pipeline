@@ -307,6 +307,22 @@ async def test_the_app_role_can_only_read_and_append(
                 await connection.execute(statement)
 
 
+async def test_the_schema_refuses_an_unknown_suspect_reason(engine: AsyncEngine) -> None:
+    with pytest.raises(IntegrityError, match="suspect_reason_known"):
+        async with engine.begin() as connection:
+            await connection.execute(
+                observations.insert().values(
+                    series_id="rate",
+                    source="s",
+                    fetched_at=T0,
+                    status="suspect",
+                    value=Decimal(1),
+                    as_of=T0,
+                    reason="gut feeling",
+                )
+            )
+
+
 async def test_the_schema_refuses_an_accepted_row_without_a_value(engine: AsyncEngine) -> None:
     with pytest.raises(IntegrityError, match="value_unless_rejected"):
         async with engine.begin() as connection:

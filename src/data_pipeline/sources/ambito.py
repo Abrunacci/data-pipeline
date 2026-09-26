@@ -11,16 +11,15 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from data_pipeline.core.readings import Reading
+from data_pipeline.core.schedule import BUENOS_AIRES
 from data_pipeline.core.sources import MalformedResponseError, Request
 from data_pipeline.sources.parsing import describe, load_json
 
 MEP_URL = "https://mercados.ambito.com//dolarrava/mep/variacion"
-BUENOS_AIRES = ZoneInfo("America/Argentina/Buenos_Aires")
 _PRICE = re.compile(r"^[0-9]{1,3}(\.[0-9]{3})*,[0-9]+$|^[0-9]+,[0-9]+$")
 _DATE_FORMAT = "%d/%m/%Y - %H:%M"
 

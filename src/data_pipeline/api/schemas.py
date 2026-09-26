@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Literal
-from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
 
 from data_pipeline.core.gap import Gap
+from data_pipeline.core.schedule import BUENOS_AIRES
 from data_pipeline.core.series import Series
 from data_pipeline.runner.store import Day, Latest
 
@@ -61,7 +61,7 @@ class LatestRates(BaseModel):
 
 
 # Days of the history are days in Buenos Aires: the calculator's users' days.
-HISTORY_ZONE = ZoneInfo("America/Argentina/Buenos_Aires")
+HISTORY_ZONE = BUENOS_AIRES
 DEFAULT_HISTORY_DAYS = 30
 MAX_HISTORY_DAYS = 400
 # No series has values before this; it also keeps date arithmetic far from date.min.
@@ -100,7 +100,8 @@ def history_range(first: date | None, last: date | None, today: date) -> DayRang
     for day in (first, last):
         if day is not None and not EARLIEST_HISTORY_DAY <= day <= today + timedelta(days=1):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "date_out_of_range")
-    first = last - timedelta(days=DEFAULT_HISTORY_DAYS - 1) if first is None else first
+    if first is None:
+        first = max(last - timedelta(days=DEFAULT_HISTORY_DAYS - 1), EARLIEST_HISTORY_DAY)
     if first > last:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "from_after_to")
     if (last - first).days + 1 > MAX_HISTORY_DAYS:
