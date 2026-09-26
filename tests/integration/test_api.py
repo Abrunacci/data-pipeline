@@ -57,7 +57,7 @@ async def test_every_series_is_listed_even_without_a_value(
     response = await client.get("/v1/rates/latest")
     assert response.status_code == 200
     rates = response.json()["rates"]
-    assert list(rates) == ["mep", "p2p_usdt_usd", "bitso_usdt_ars", "arq_usd_ars"]
+    assert list(rates) == ["mep", "binance_p2p_usdt_usd", "bitso_usdt_ars", "arq_usd_ars"]
     # No value yet, but the failed attempt shows: it is failing, not waiting to start.
     assert rates["mep"] == {
         "value": None,

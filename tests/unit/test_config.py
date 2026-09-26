@@ -40,7 +40,7 @@ def test_the_repo_series_file_loads() -> None:
         s.id: s
         for s in load_series(DEFAULT_SERIES_FILE, available_sources(), available_history_sources())
     }
-    assert list(series) == ["mep", "p2p_usdt_usd", "bitso_usdt_ars", "arq_usd_ars"]
+    assert list(series) == ["mep", "binance_p2p_usdt_usd", "bitso_usdt_ars", "arq_usd_ars"]
     mep = series["mep"]
     assert mep.control == "ambito_mep"
     assert mep.hours is not None
@@ -49,7 +49,7 @@ def test_the_repo_series_file_loads() -> None:
     assert not mep.runs_at(datetime(2026, 9, 26, 15, 0, tzinfo=UTC))
     assert series["bitso_usdt_ars"].rules.max_jump == Decimal("0.05")
     assert series["bitso_usdt_ars"].rules.control_within == Decimal("0.015")
-    assert series["p2p_usdt_usd"].every == timedelta(minutes=10)
+    assert series["binance_p2p_usdt_usd"].every == timedelta(minutes=10)
     assert not series["arq_usd_ars"].official_source
     assert all(s.official_source for s in series.values() if s.id != "arq_usd_ars")
     assert not any(s.indicative for s in series.values())

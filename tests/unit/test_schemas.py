@@ -50,7 +50,7 @@ def test_a_suspect_is_pending_while_it_is_at_most_three_intervals_old() -> None:
 
 
 def test_the_gap_is_published_in_percent() -> None:
-    card = SERIES["p2p_usdt_usd"]
+    card = SERIES["binance_p2p_usdt_usd"]
     gap = Gap(Decimal("0.04320459"), 3, FRIDAY_CLOSE, FRIDAY_CLOSE + timedelta(days=4))
     indicative = replace(card, indicative=True, gap=gap)
     rate = latest_rate(published(FRIDAY_CLOSE), indicative, FRIDAY_CLOSE)
