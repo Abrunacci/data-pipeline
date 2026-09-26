@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Literal
 
@@ -17,8 +17,9 @@ from data_pipeline.runner.store import Day, Latest
 
 
 class FinalPriceGap(BaseModel):
-    """How much less a trade got than the indicative price, from observed pairs: the median of
-    ``samples`` observations between ``first`` and ``last``. ``percent`` 4.32 is 4.32 %."""
+    """How much worse the final price was than the indicative one, fee aside, from observed
+    pairs: the median of ``samples`` observations between ``first`` and ``last``. ``percent``
+    2.37 is 2.37 %: the final price is about ``value * (1 - percent / 100)``."""
 
     percent: str
     samples: int
@@ -142,6 +143,7 @@ def _gap(gap: Gap) -> FinalPriceGap:
         # Display only: two decimals, half to even. The exact fraction stays in the series.
         percent=format((gap.fraction * 100).quantize(Decimal("0.01"), ROUND_HALF_EVEN), "f"),
         samples=gap.samples,
-        first=gap.first,
-        last=gap.last,
+        # In UTC, like every other time the API returns.
+        first=gap.first.astimezone(UTC),
+        last=gap.last.astimezone(UTC),
     )

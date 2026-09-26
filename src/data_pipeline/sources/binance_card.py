@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import ROUND_DOWN, Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -50,10 +51,18 @@ class _Answer(BaseModel):
     data: _Data
 
 
+# The calculator accepts prices with at most 8 decimals (core.checks.MAX_DECIMALS).
+EIGHT_DECIMALS = Decimal("0.00000001")
+
+
 @dataclass(frozen=True, slots=True)
 class BinanceCardPrice:
-    """How many ``fiat`` Binance lists for each ``crypto`` bought with a card in ``country``:
-    ``quotation``, e.g. 1.0228 USD per USDT."""
+    """How much ``crypto`` Binance lists for each ``fiat`` paid with a card in ``country``.
+
+    Binance quotes the other way round (``quotation``: 1.02282331 USD per USDT). The inverse
+    has endless decimals, so it is rounded down to 8, the project's rule for what a person
+    gets: 0.97768597 USDT per USD, as Binance itself shows for 10 USD (9.7768597 USDT).
+    """
 
     fiat: str = "USD"
     crypto: str = "USDT"
@@ -61,7 +70,7 @@ class BinanceCardPrice:
 
     @property
     def name(self) -> str:
-        return f"binance_card_{self.crypto.lower()}_{self.fiat.lower()}_list"
+        return f"binance_card_{self.fiat.lower()}_{self.crypto.lower()}_list"
 
     def request(self) -> Request:
         return Request(
@@ -80,4 +89,7 @@ class BinanceCardPrice:
             raise NoQuoteError(f"no {CARD} among {[method.code for method in methods]}")
         if cards[0].suspended:
             raise NoQuoteError(f"{CARD} is suspended")
-        return Reading(cards[0].quotation, fetched_at)
+        if cards[0].quotation == 0:
+            raise MalformedResponseError(f"{CARD} quotation is zero")
+        per_fiat = (1 / cards[0].quotation).quantize(EIGHT_DECIMALS, ROUND_DOWN)
+        return Reading(per_fiat, fetched_at)

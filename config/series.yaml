@@ -59,3 +59,17 @@ series:
     plausible: {min: 500, max: 50000}
     max_age_minutes: 30
     max_jump_percent: 5
+
+  - id: binance_card_usd_usdt
+    description: >-
+      USDT Binance lists for each USD paid with a card (indicative: the final screen gives
+      less; final_price_gap estimates how much, fee aside)
+    sources: [binance_card_usd_usdt_list]
+    indicative: true
+    # Observed list/final pairs, entered by hand.
+    gap_samples: ../data/binance_card_quotes.csv
+    every_minutes: 10
+    plausible: {min: 0.5, max: 2}
+    # The answer carries no time: a reading is as of when it was fetched.
+    max_age_minutes: 30
+    max_jump_percent: 2

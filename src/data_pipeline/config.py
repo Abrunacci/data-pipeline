@@ -182,8 +182,7 @@ GAP_COLUMNS = ("observed_at", "fiat_amount_usd", "list_usdt", "final_usdt", "fee
 
 
 def load_gap_samples(path: Path) -> list[GapSample]:
-    """Read observed list/final pairs. ``fee_usd`` and ``note`` are kept in the file for the
-    record; the gap uses the amounts, which already include every fee."""
+    """Read observed list/final pairs. ``note`` is kept in the file for the record."""
     with path.open(encoding="utf-8", newline="") as file:
         reader = csv.DictReader(file, strict=True)
         if tuple(reader.fieldnames or ()) != GAP_COLUMNS:
@@ -196,16 +195,12 @@ def load_gap_samples(path: Path) -> list[GapSample]:
             if None in row or None in row.values():
                 raise GapSamplesError(f"{where}: expected {len(GAP_COLUMNS)} columns")
             try:
-                fee = Decimal(row["fee_usd"])
-                if not fee.is_finite() or fee < 0:
-                    raise ValueError(
-                        f"fee_usd must be a finite, non-negative amount, got {row['fee_usd']}"
-                    )
                 observed_at = datetime.fromisoformat(row["observed_at"])
                 samples.append(
                     GapSample(
                         observed_at=observed_at,
                         amount=Decimal(row["fiat_amount_usd"]),
+                        fee=Decimal(row["fee_usd"]),
                         listed=Decimal(row["list_usdt"]),
                         final=Decimal(row["final_usdt"]),
                     )
