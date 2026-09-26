@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_EVEN, Decimal
+from fractions import Fraction
 
 import pytest
 
-from data_pipeline.core.gap import GapSample, estimate_final, summarize
+from data_pipeline.core.gap import Gap, GapSample, estimate_final, summarize
 
 WHEN = datetime(2026, 9, 25, 18, 18, tzinfo=UTC)
 
@@ -35,7 +36,7 @@ def test_the_median_is_published_with_the_dates() -> None:
     ]
     summary = summarize(samples)
     assert summary is not None
-    assert summary.fraction == 1 - Decimal(96) / 98
+    assert summary.kept == Fraction(96, 98)
     assert summary.samples == 3
     assert (summary.first, summary.last) == (days[1], days[0])
 
@@ -62,5 +63,21 @@ def test_the_estimated_final_price_is_rounded_down() -> None:
     # 0.97768597 * (1 - 0.023676...) = 0.954533789547...: rounded down, not up to ...79.
     assert estimate_final(Decimal("0.97768597"), gap) == Decimal("0.95453378")
     # On the observed purchase's own listed price it gives back its final price,
-    # 9.35393217 / 9.80 = 0.95448287..., to the step.
+    # 9.35393217 / 9.80 = 0.95448287..., rounded down.
     assert estimate_final(Decimal("0.97763382"), gap) == Decimal("0.95448287")
+
+
+def test_an_estimate_exactly_on_a_step_is_not_one_step_low() -> None:
+    # 10 USD, no fee, 99.8704998 listed, 98.0728308 final: on the listed price per unit the
+    # exact estimate is the final price per unit, 9.80728308, exactly on a step. A gap rounded
+    # to 28 digits before multiplying gave 9.80728307.
+    gap = summarize([sample("10", "0", "99.8704998", "98.0728308")])
+    assert gap is not None
+    assert estimate_final(Decimal("9.98704998"), gap) == Decimal("9.80728308")
+
+
+def test_the_gap_must_keep_part_of_the_price() -> None:
+    with pytest.raises(ValueError, match="above 0 and at most 1"):
+        Gap(Fraction(0), 1, WHEN, WHEN)
+    with pytest.raises(ValueError, match="above 0 and at most 1"):
+        Gap(Fraction(11, 10), 1, WHEN, WHEN)

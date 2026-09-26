@@ -10,10 +10,10 @@ from typing import Literal
 from fastapi import HTTPException, status
 from pydantic import BaseModel
 
-from data_pipeline.core.checks import canonical
+from data_pipeline.core.checks import canonical, value_problem
 from data_pipeline.core.gap import Gap, estimate_final
 from data_pipeline.core.series import Series
-from data_pipeline.runner.store import Day, Latest
+from data_pipeline.runner.store import Day, Latest, Published
 
 
 class FinalPriceGap(BaseModel):
@@ -137,13 +137,21 @@ def latest_rate(latest: Latest, series: Series, now: datetime) -> Rate:
         official_source=series.official_source,
         indicative=series.indicative,
         final_price_gap=None if series.gap is None else _gap(series.gap),
-        estimated_final=(
-            None
-            if published is None or series.gap is None
-            # Without trailing zeros, like every value the API publishes.
-            else format(canonical(estimate_final(published.value, series.gap)), "f")
-        ),
+        estimated_final=_estimate(published, series.gap),
     )
+
+
+def _estimate(published: Published | None, gap: Gap | None) -> str | None:
+    """The gap's estimate for the published value, or None without both, or when it is not a
+    value the calculator would accept (a gap near 100 % from a mistyped observation rounds it
+    to 0)."""
+    if published is None or gap is None:
+        return None
+    estimate = estimate_final(published.value, gap)
+    if value_problem(estimate) is not None:
+        return None
+    # Without trailing zeros, like every value the API publishes.
+    return format(canonical(estimate), "f")
 
 
 def _gap(gap: Gap) -> FinalPriceGap:

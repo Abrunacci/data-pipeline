@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
+from fractions import Fraction
 
 from data_pipeline.api.schemas import latest_rate
 from data_pipeline.config import DEFAULT_SERIES_FILE, load_series
@@ -51,7 +52,7 @@ def test_a_suspect_is_pending_while_it_is_at_most_three_intervals_old() -> None:
 
 def test_the_gap_is_published_in_percent() -> None:
     card = SERIES["binance_card_usd_usdt"]
-    gap = Gap(Decimal("0.04320459"), 3, FRIDAY_CLOSE, FRIDAY_CLOSE + timedelta(days=4))
+    gap = Gap(1 - Fraction("0.04320459"), 3, FRIDAY_CLOSE, FRIDAY_CLOSE + timedelta(days=4))
     indicative = replace(card, indicative=True, gap=gap)
     rate = latest_rate(published(FRIDAY_CLOSE), indicative, FRIDAY_CLOSE)
     assert rate.indicative
@@ -70,3 +71,12 @@ def test_the_gap_is_published_in_percent() -> None:
     assert shown is not None
     assert shown.first.tzinfo is UTC
     assert shown.first == local
+
+
+def test_an_estimate_the_calculator_would_refuse_is_not_published() -> None:
+    # A mistyped observation that kept 1e-12 of the price: 1550 * 1e-12 rounds down to 0.
+    card = SERIES["binance_card_usd_usdt"]
+    gap = Gap(Fraction(1, 10**12), 1, FRIDAY_CLOSE, FRIDAY_CLOSE)
+    rate = latest_rate(published(FRIDAY_CLOSE), replace(card, gap=gap), FRIDAY_CLOSE)
+    assert rate.value == "1550"
+    assert rate.estimated_final is None

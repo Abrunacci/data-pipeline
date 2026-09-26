@@ -65,8 +65,9 @@ estimated from observed pairs, written down by hand in
 The published gap is the median over every row of the price gap, fee aside:
 `1 - (final_usdt / (fiat_amount_usd - fee_usd)) / (list_usdt / fiat_amount_usd)`, with how many
 rows there are and their first and last dates. The API also publishes `estimated_final`, the
-final price that gap predicts for the current listed price, `value * (1 - gap)`, rounded down
-to 8 decimals: it is what the calculator's card price field asks for. When a series uses the file (`gap_samples`), it
+final price, fee aside, that the gap predicts for the current listed price: `value * (1 - gap)`,
+computed exactly and rounded down to 8 decimals. It is what the calculator's card price field
+asks for. When a series uses the file (`gap_samples`), it
 is checked when the app starts: a row with a naive time, a wrong number of columns, a fee
 below 0 or not below the amount, or a final price (fee aside) better than the listed one stops
 it with the line number. The file ships inside the image, so new rows take
