@@ -66,8 +66,9 @@ The published gap is the median over every row of the price gap, fee aside:
 `1 - (final_usdt / (fiat_amount_usd - fee_usd)) / (list_usdt / fiat_amount_usd)`, with how many
 rows there are and their first and last dates. The final price is about
 `value * (1 - percent / 100)`. When a series uses the file (`gap_samples`), it
-is checked when the app starts: a row with a naive time, a wrong number of columns or a final
-above the list stops it with the line number. The file ships inside the image, so new rows take
+is checked when the app starts: a row with a naive time, a wrong number of columns, a fee
+below 0 or not below the amount, or a final price (fee aside) better than the listed one stops
+it with the line number. The file ships inside the image, so new rows take
 a new deploy.
 
 ## Why not Airflow

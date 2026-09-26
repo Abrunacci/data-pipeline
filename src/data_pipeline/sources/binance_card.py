@@ -5,17 +5,26 @@ reference rates; execution prices may differ"
 (https://www.binance.com/en/skills/detail/binance/fiat). It states no rate limit; Binance's
 terms are summarized in the P2P source.
 
-On 2026-09-25 a real purchase of 10 USD got about 4.3 % less USDT than this price promised: the
-final price is only shown to a logged-in user. Series built on it are marked indicative, and the
-gap is estimated from observed pairs (``core.gap``). The answer has no timestamp: it is as of
-the answer.
+On 2026-09-25 a real purchase of 10 USD got 4.3 % less USDT than this price promised: a 2 %
+fee, which the calculator charges on its own, and a price 2.37 % worse than listed. The final
+price is only shown to a logged-in user. Series built on it are marked indicative, and the
+price gap is estimated from observed pairs (``core.gap``). The answer has no timestamp: it is
+as of the answer.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import ROUND_DOWN, Decimal
+from decimal import (
+    ROUND_DOWN,
+    Context,
+    Decimal,
+    DivisionByZero,
+    InvalidOperation,
+    Overflow,
+    localcontext,
+)
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -53,6 +62,7 @@ class _Answer(BaseModel):
 
 # The calculator accepts prices with at most 8 decimals (core.checks.MAX_DECIMALS).
 EIGHT_DECIMALS = Decimal("0.00000001")
+_INVERSE = Context(prec=40, rounding=ROUND_DOWN, traps=[InvalidOperation, DivisionByZero, Overflow])
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +99,16 @@ class BinanceCardPrice:
             raise NoQuoteError(f"no {CARD} among {[method.code for method in methods]}")
         if cards[0].suspended:
             raise NoQuoteError(f"{CARD} is suspended")
-        if cards[0].quotation == 0:
+        quotation = cards[0].quotation
+        if quotation == 0:
             raise MalformedResponseError(f"{CARD} quotation is zero")
-        per_fiat = (1 / cards[0].quotation).quantize(EIGHT_DECIMALS, ROUND_DOWN)
+        # Its own context, so the result does not depend on the thread's: 40 digits hold the
+        # exact inverse of any quotation to 8 decimals, and the checks reject absurd ones.
+        try:
+            with localcontext(_INVERSE):
+                per_fiat = (1 / quotation).quantize(EIGHT_DECIMALS)
+        except ArithmeticError as error:
+            raise MalformedResponseError(
+                f"{CARD} quotation {quotation} cannot be inverted"
+            ) from error
         return Reading(per_fiat, fetched_at)

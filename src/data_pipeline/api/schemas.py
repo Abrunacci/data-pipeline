@@ -11,7 +11,6 @@ from fastapi import HTTPException, status
 from pydantic import BaseModel
 
 from data_pipeline.core.gap import Gap
-from data_pipeline.core.schedule import BUENOS_AIRES
 from data_pipeline.core.series import Series
 from data_pipeline.runner.store import Day, Latest
 
@@ -61,8 +60,7 @@ class LatestRates(BaseModel):
     rates: dict[str, Rate]
 
 
-# Days of the history are days in Buenos Aires: the calculator's users' days.
-HISTORY_ZONE = BUENOS_AIRES
+# Days of the history are days in Buenos Aires (core.schedule.BUENOS_AIRES).
 DEFAULT_HISTORY_DAYS = 30
 MAX_HISTORY_DAYS = 400
 # No series has values before this; it also keeps date arithmetic far from date.min.

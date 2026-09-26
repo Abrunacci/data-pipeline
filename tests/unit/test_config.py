@@ -60,7 +60,7 @@ def test_the_repo_series_file_loads() -> None:
     assert all(s.official_source for s in series.values() if s.id != "arq_usd_ars")
     card = series["binance_card_usd_usdt"]
     assert [s.id for s in series.values() if s.indicative] == [card.id]
-    # The repo's observed pairs: the one from 2026-09-25 so far, 2.37 % fee aside.
+    # The repo's observed pairs; the file grows, so only that there are some.
     assert card.gap is not None
     assert card.gap.samples >= 1
 

@@ -21,7 +21,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from data_pipeline.api.schemas import (
-    HISTORY_ZONE,
     Health,
     History,
     LatestRates,
@@ -30,6 +29,7 @@ from data_pipeline.api.schemas import (
     latest_rate,
 )
 from data_pipeline.config import Settings, load_series
+from data_pipeline.core.schedule import BUENOS_AIRES
 from data_pipeline.core.series import Series
 from data_pipeline.core.sources import HistorySource, Source
 from data_pipeline.runner.scheduler import run_series
@@ -135,8 +135,8 @@ def create_app(settings: Settings) -> FastAPI:
         default the last 30 days; at most 400 days per request."""
         if series_id not in by_id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown_series")
-        days = history_range(first, last, datetime.now(HISTORY_ZONE).date())
-        found = await store.daily(series_id, days.first, days.last, HISTORY_ZONE)
+        days = history_range(first, last, datetime.now(BUENOS_AIRES).date())
+        found = await store.daily(series_id, days.first, days.last, BUENOS_AIRES)
         return History(
             series=series_id,
             first=days.first,
