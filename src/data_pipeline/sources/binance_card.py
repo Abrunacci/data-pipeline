@@ -105,7 +105,7 @@ class BinanceCardPrice:
         # Its own context, so the result does not depend on the thread's. Truncating the
         # quotient at 40 significant digits and then at 8 decimals gives the same result as
         # truncating the exact quotient once, whenever the result fits in 40 digits. One that
-        # does not (a quotation below about 1e-32) is malformed; a merely absurd one (1e-28)
+        # does not (a quotation at or below 1e-32) is malformed; a merely absurd one (1e-28)
         # inverts, and the checks reject it. The quotation has no sign: DecimalText refuses one.
         try:
             with localcontext(_INVERSE):
