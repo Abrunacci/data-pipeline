@@ -29,6 +29,19 @@ ENV PATH=/app/.venv/bin:$PATH \
     SERIES_FILE=/app/config/series.yaml
 USER app
 EXPOSE 8000
+# The process touches /tmp/alive every 30 s; the check fails when it is missing or older than
+# 2 minutes (src/data_pipeline/runner/heartbeat.py). It needs a writable /tmp, a tmpfs on the server.
+# - interval 30s: one check per beat; with retries 3, a hung process is unhealthy within about
+#   3.5 minutes (2 for the file to age, then 3 failed checks).
+# - timeout 5s: the check is a stat from a bare Python start, well under a second even on a busy
+#   server; slower than 5 s counts as a failure.
+# - start-period 60s: failures while the app starts do not count, and the first success ends it.
+# - start-interval 2s: checks every 2 s during the start period, so the deploy sees "healthy"
+#   seconds after the first beat instead of waiting a full interval. Docker Engine 25+; older
+#   engines ignore it and check every 30 s from the start.
+# - retries 3: one slow check under load does not flip it; three in a row do.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s --retries=3 \
+    CMD ["python", "-m", "data_pipeline.runner.heartbeat"]
 # One worker: the scheduler runs inside the process, and one is plenty for a few reads a minute.
 CMD ["uvicorn", "--factory", "data_pipeline.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", \
      "--timeout-graceful-shutdown", "10"]
