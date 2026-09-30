@@ -62,3 +62,10 @@ jobs:
           --cap-drop ALL --security-opt no-new-privileges
           --env DATABASE_URL=postgresql+psycopg://unused@localhost/unused data-pipeline:ci
           sh -c 'alembic history && python -c "from data_pipeline.api.main import app; app()"'
+      # The HEALTHCHECK command in the same conditions: it fails without the heartbeat file and
+      # passes once the file is there.
+      - run: >-
+          docker run --rm --network none --read-only --tmpfs /tmp --user 10005:10005
+          --cap-drop ALL --security-opt no-new-privileges data-pipeline:ci
+          sh -c '! python -m data_pipeline.runner.heartbeat && touch /tmp/alive
+          && python -m data_pipeline.runner.heartbeat'

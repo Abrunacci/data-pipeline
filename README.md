@@ -146,6 +146,12 @@ What Airflow would give is built in:
 `GET /health` returns 200 when the app can read its table, and 503 when it cannot. Every
 endpoint answers 503 when the database is down.
 
+The image also has a Docker `HEALTHCHECK` that does not go through HTTP: the process touches
+`/tmp/alive` every 30 seconds, also with `RUN_SCHEDULER=false`, and the check fails when the
+file is missing or older than 2 minutes. `/health` says the database answers; the heartbeat says
+the process is alive. See `docker ps` or
+`docker inspect --format '{{json .State.Health}}' <container>`.
+
 ## Running it
 
 With Docker:

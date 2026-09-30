@@ -32,6 +32,7 @@ from data_pipeline.config import Settings, load_series
 from data_pipeline.core.schedule import BUENOS_AIRES
 from data_pipeline.core.series import Series
 from data_pipeline.core.sources import HistorySource, Source
+from data_pipeline.runner.heartbeat import beat_forever
 from data_pipeline.runner.scheduler import run_series
 from data_pipeline.runner.store import Store
 from data_pipeline.sources import available_history_sources, available_sources
@@ -64,9 +65,10 @@ def create_app(settings: Settings) -> FastAPI:
         ) as client:
             app.state.engine = engine
             app.state.store = store
-            tasks = (
-                _start(series, sources, histories, client, store) if settings.run_scheduler else []
-            )
+            # The heartbeat runs even without the scheduler: it says the process is alive.
+            tasks = [asyncio.create_task(beat_forever(), name="heartbeat")]
+            if settings.run_scheduler:
+                tasks += _start(series, sources, histories, client, store)
             try:
                 yield
             finally:
