@@ -110,6 +110,9 @@ A failure in 1–3 tries the next source. A suspect does not: the source did ans
   clock correction must not reorder the history.
 - `/health` reads the app's own table, so a missing schema or grant fails the deploy's health
   check and triggers the rollback.
+- The image's `HEALTHCHECK` runs `python -m data_pipeline.runner.heartbeat`, which checks the
+  file the app touches every 30 s. Keep that module standard-library only: it starts on every
+  check, and a slow import is a failed check.
 - A deploy can roll back the code but never a migration, so every migration must work with the
   code of the release before it: add columns and tables, do not rename or drop in the same
   release. Migrations run with a 5 s `lock_timeout`, so one that would block the running app
