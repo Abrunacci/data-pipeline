@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -151,8 +152,9 @@ def test_an_indicative_series_reads_its_gap_from_observed_pairs(tmp_path: Path) 
     assert series.indicative
     assert series.gap is not None
     assert series.gap.samples == 3
-    expected = 1 - (Decimal("9.35393217") / Decimal("9.80")) / (Decimal("9.7763") / 10)
-    assert series.gap.fraction == expected
+    # The median is the first row's, kept exactly as a fraction.
+    kept = (Fraction("9.35393217") / Fraction("9.80")) / (Fraction("9.7763") / 10)
+    assert series.gap.kept == kept
     assert series.gap.first == datetime(2026, 9, 25, 18, 10, tzinfo=UTC)
     assert series.gap.last == datetime(2026, 9, 29, 15, 0, tzinfo=UTC)
 
