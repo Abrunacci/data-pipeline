@@ -140,3 +140,8 @@ Code, comments, commits, PR descriptions and the README are in English.
 - Small commits with an imperative subject that says what changed.
 - Review your own diff against `main` (`git diff main...HEAD`) before opening a PR.
 - Commits have a single author and no `Co-Authored-By` trailers.
+- CI enforces it on every PR with the **Check commit metadata** step, a shared action from
+  [infra](https://github.com/Abrunacci/infra/tree/main/.github/actions/check-commit-metadata):
+  each commit is authored by the owner and committed by the owner or GitHub, and no commit message
+  carries a `Co-Authored-By` trailer, a "Generated with/by" line, a "Requested by … thread" line
+  or a blocked link. It checks commits only; the PR description is reviewed by hand.

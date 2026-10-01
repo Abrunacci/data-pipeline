@@ -22,6 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # The same step every repository of the owner runs; the policy lives in infra
+      # (.github/actions/check-commit-metadata/README.md). It reads the PR's commits with the job's
+      # token, needs no checkout, and passes on pushes and the weekly run, where there is no PR.
+      - name: Check commit metadata
+        uses: Abrunacci/infra/.github/actions/check-commit-metadata@1306bea3c9d3c518394cc9ea249d7b3753a7a381  # main
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
