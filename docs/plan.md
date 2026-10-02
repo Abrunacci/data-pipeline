@@ -1,6 +1,7 @@
 # Plan: from API with a database to a runner that pushes
 
-Status: proposed, 2026-10-01. No code for these steps until it is approved.
+Status: proposed, 2026-10-01; open questions answered 2026-10-02. No code for these steps until
+it is approved.
 
 ## Where it goes
 
@@ -12,12 +13,18 @@ The target is a runner with no database and no HTTP of its own:
 
 - It reads and checks each series as it does today, with the same rules (`core/`), and keeps what
   the checks need (last accepted value, held-back suspects) in memory.
-- Each **accepted** value goes to cuanto-cuesta's ingest API (`Authorization: Bearer`, over the
-  server's internal network, not the public proxy). cuanto-cuesta keeps one field per rate,
-  overwritten by each new value, with no history.
+- Each **accepted** reading goes to cuanto-cuesta's ingest API (`Authorization: Bearer`, over
+  the server's internal network, not the public proxy), every run, even when the value did not
+  change: its `observed_at` keeps the rate fresh in cuanto-cuesta, which otherwise would flag a
+  stable value as possibly old. cuanto-cuesta keeps one field per rate, overwritten by each new
+  value, with no history.
 - Failed, suspect and control readings go to the runner's log only.
 - On start, it asks cuanto-cuesta for the current value of each rate, so the jump check has a
-  previous value. A restart loses the suspects being held; that is accepted.
+  previous value. If cuanto-cuesta does not answer, it retries for a few minutes (five, as a
+  default) and then starts empty. A restart loses the suspects being held; that is accepted.
+- With no previous value, the first reading of a series has no reference for the jump rule: it
+  still goes through the per-reading checks (accepted by the calculator, plausible range, not
+  stale), and when accepted it is logged as accepted with **no reference**.
 - If cuanto-cuesta does not answer, the value is logged and dropped. No queue: the next run sends
   a newer one.
 - For `binance_card_usd_usdt` it sends the listed `price` and `estimated_final`, or only `price`
@@ -50,13 +57,16 @@ the code, unused.
 - Usable: the first version that can run on the server, which provides no database for this
   project. Its log shows exactly what would be sent.
 - Undo: revert, and the `CMD` goes back to the API.
-- State: starts empty on every restart until step 3. With no previous value, the first valid
-  reading of each series is accepted as it is (`decide` in `core/checks.py`): only the
-  per-reading checks apply (accepted by the calculator, plausible range, not stale).
+- State: starts empty on every restart until step 3, so the first reading of each series after
+  a start is accepted with no reference, as above. Today `decide` (`core/checks.py`) accepts it
+  the same way but records nothing that says so; this step adds that to the log.
 - cuanto-cuesta: nothing.
 - infra: nothing new. The entry in `projects.yml` already has no database, port or health path,
   and health comes from the image's `HEALTHCHECK`. The first deploy needs infra's deploy key
-  (Abrunacci/infra#40) merged and the playbook run, and this repo's deploy job.
+  (Abrunacci/infra#40) merged and the playbook run, and this repo's deploy job (#9), which is
+  merged right after this step.
+- GitHub: after the first publish, the package `ghcr.io/abrunacci/data-pipeline` is made public,
+  so the server pulls it with no credentials.
 
 ### 2. HTTP destination to cuanto-cuesta
 
@@ -79,7 +89,8 @@ configuration (`DESTINATION=log|http`), so going back to logging is an environme
 Before the first run, the runner asks cuanto-cuesta for the current value of each rate and uses
 them as the last accepted values.
 
-- Usable: a restart no longer accepts a first reading that jumped.
+- Usable: after a restart, the first reading is checked against the value cuanto-cuesta holds.
+  Only when cuanto-cuesta does not answer within the retries does it start empty.
 - Undo: revert; the runner starts empty again, as in steps 1 and 2.
 - cuanto-cuesta: a read endpoint for the current values, with the same token. It is not in the
   starting contract, so it has to be added to its PR 1 or a later one.
@@ -92,24 +103,12 @@ Postgres in `compose.yml`, the `DATABASE_URL` setting, the MEP history loader an
 Postgres integration tests, and the dependencies only they use (FastAPI, uvicorn, SQLAlchemy,
 psycopg, Alembic, testcontainers). README and CONTRIBUTING describe the runner.
 
-- Before: a final `pg_dump` of any database this app has written to, kept outside the repo. No
-  history is copied anywhere and the MEP is not backfilled.
+- No data is kept: the server never had a database for this project, and cuanto-cuesta keeps no
+  history. No history is copied anywhere and the MEP is not backfilled.
 - Usable: a smaller image with a single job.
-- Undo: revert the commit. The data is in the dump.
+- Undo: revert the commit.
 - cuanto-cuesta: nothing.
 - infra: nothing. The server never had a database for this project.
-
-## Open questions
-
-1. **What gets sent.** Every accepted reading (each run, even when the value did not change,
-   which also tells cuanto-cuesta the value is fresh), or only readings whose value changed.
-2. **cuanto-cuesta down when the runner starts (step 3).** Start empty and log it, retry for a
-   while and then start empty, or run no series until it answers.
-3. **First deploy.** The current image cannot start on the server: it requires `DATABASE_URL`,
-   and the project has no database there. The deploy job waits for step 1, is merged now but run
-   by hand only, or is merged now and its first runs fail until step 1.
-4. **Final dump.** Which database, if any, holds data worth the `pg_dump` (a local Compose
-   volume, another server).
 
 ## Not in this plan
 
