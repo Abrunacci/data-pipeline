@@ -10,7 +10,7 @@ value to the app it feeds. For now it builds the batch cuanto-cuesta's ingest AP
 it without sending it ([docs/plan.md](docs/plan.md), step 1).
 
 The API with its own Postgres, which stored every attempt and served the last accepted values,
-is still in the code but no longer runs in the image; step 4 of the plan removes it.
+is still in the code but no longer runs in the image; step 3 of the plan removes it.
 
 ## The runner
 

@@ -54,7 +54,7 @@ services:
     mem_limit: 256m
     memswap_limit: 256m
 
-  # The API, on its way out (docs/plan.md, step 4). The image's command is now the runner's.
+  # The API, on its way out (docs/plan.md, step 3). The image's command is now the runner's.
   app:
     image: data-pipeline:local
     command: ["uvicorn", "--factory", "data_pipeline.api.main:app", "--host", "0.0.0.0",

@@ -18,9 +18,9 @@ The target is a runner with no database and no HTTP of its own:
   stable value as possibly old. cuanto-cuesta keeps one field per rate, overwritten by each new
   value, with no history.
 - Failed, suspect and control readings go to the runner's log only.
-- On start, it asks cuanto-cuesta for the current value of each rate, so the jump check has a
-  previous value. If cuanto-cuesta does not answer, it retries for a few minutes (five, as a
-  default) and then starts empty. A restart loses the suspects being held; that is accepted.
+- It starts empty on every start and reads nothing back from cuanto-cuesta. A restart loses the
+  last accepted values and the suspects being held; that is accepted. Checking a value against
+  what the app already holds is the app's job, in its own backend, not the pipeline's.
 - With no previous value, the first reading of a series has no reference for the jump rule: it
   still goes through the per-reading checks (accepted by the calculator, plausible range, not
   stale), and when accepted it is logged as accepted with **no reference**.
@@ -71,7 +71,7 @@ the code, unused.
 - Usable: the first version that can run on the server, which provides no database for this
   project. Its log shows exactly what would be sent.
 - Undo: revert, and the `CMD` goes back to the API.
-- State: starts empty on every restart until step 3, so the first reading of each series after
+- State: starts empty on every restart, so the first reading of each series after
   a start is accepted with no reference, as above. Today `decide` (`core/checks.py`) accepts it
   the same way but records nothing that says so; this step adds that to the log.
 - cuanto-cuesta: nothing.
@@ -103,18 +103,7 @@ the order infra applies its part in, and going back to logging is an environment
     because this runner will feed other apps;
   - the endpoint's internal URL as a non-secret `env` value, `CUANTO_CUESTA_INGEST_URL`.
 
-### 3. State read from cuanto-cuesta on start
-
-Before the first run, the runner reads cuanto-cuesta's `GET /api/rates` and uses each rate's
-`price` as its last accepted value. A rate cuanto-cuesta has no quote for starts empty.
-
-- Usable: after a restart, the first reading is checked against the value cuanto-cuesta holds.
-  Only when cuanto-cuesta does not answer within the retries does it start empty.
-- Undo: revert; the runner starts empty again, as in steps 1 and 2.
-- cuanto-cuesta: nothing beyond step 2; `GET /api/rates` is in its PR 1, public, with no token.
-- infra: nothing beyond step 2.
-
-### 4. Remove the database and the API
+### 3. Remove the database and the API
 
 Delete the API (`api/`), `/health`, `EXPOSE 8000`, `storage/`, the migrations and `alembic.ini`,
 Postgres in `compose.yml`, the `DATABASE_URL` setting, the MEP history loader and its source, the
@@ -130,6 +119,9 @@ psycopg, Alembic, testcontainers). README and CONTRIBUTING describe the runner.
 
 ## Not in this plan
 
+- Reading cuanto-cuesta's `GET /api/rates` on start to seed the jump check (dropped 2026-10-02):
+  the pipeline does not validate against the app's data; if a value needs checking against the
+  current one, cuanto-cuesta's backend does it.
 - CriptoYa's `totalBid` and `/api/fees` for the fees it covers: an idea for later.
 - Other processes (race results for a game): each will be a new set of sources and a
   destination, added in this repo.

@@ -60,7 +60,7 @@ jobs:
           persist-credentials: false
       - run: docker build --tag data-pipeline:ci .
       # Run it the way the server does (read-only, its uid, no capabilities, no network): the
-      # runner's configuration loads with no database, and so does the API's, until step 4 of
+      # runner's configuration loads with no database, and so does the API's, until step 3 of
       # docs/plan.md removes it. Neither connects to anything.
       - run: >-
           docker run --rm --network none --read-only --tmpfs /tmp --user 10005:10005

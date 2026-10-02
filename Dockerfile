@@ -43,5 +43,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s --retries=3 \
     CMD ["python", "-m", "data_pipeline.runner.heartbeat"]
 # The runner: no database and no HTTP of its own (docs/plan.md, step 1). The API still runs from
-# this image with an explicit command, as compose.yml does, until step 4 removes it.
+# this image with an explicit command, as compose.yml does, until step 3 removes it.
 CMD ["python", "-m", "data_pipeline.runner"]
