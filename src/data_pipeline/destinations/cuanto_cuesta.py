@@ -9,17 +9,22 @@ The contract is cuanto-cuesta's (``backend/README.md``, "API", ``POST /api/inges
   without it is rejected); no other rate carries it;
 - at most 20 items and 64 KB per batch.
 
-Until its ingest endpoint is reachable, ``CuantoCuestaLog`` builds the batch and logs it.
+``CuantoCuestaIngest`` posts each batch to that endpoint and logs what cuanto-cuesta did with
+every item. ``CuantoCuestaLog`` builds the same batch and only logs it: the runner uses it while
+the endpoint's URL or token is not configured.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
+
+import httpx
 
 from data_pipeline.core.gap import publishable_estimate
 from data_pipeline.core.readings import Accepted, Observation, Reading
@@ -29,6 +34,10 @@ from data_pipeline.core.sources import Source
 logger = logging.getLogger(__name__)
 
 MAX_ITEMS = 20
+MAX_BYTES = 64 * 1024
+# The client's timeout applies to each read; this bounds the whole send. cuanto-cuesta is on the
+# same host, so a send that takes this long means it is down, and the value is dropped.
+SEND_TIMEOUT_SECONDS = 15.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,9 +106,9 @@ def _source_url(source: Source) -> str | None:
     return url if url.startswith("https://") else None
 
 
-class CuantoCuestaLog:
-    """Builds the batch each accepted reading would be sent in, one item per batch, and logs
-    it as one JSON line. It sends nothing."""
+class _Batches:
+    """Builds the batch for each accepted reading, one item per batch: a series run gives one
+    value, and sending it at once keeps its ``observed_at`` fresh in cuanto-cuesta."""
 
     def __init__(
         self,
@@ -120,6 +129,129 @@ class CuantoCuestaLog:
         item = rate_item(series, observation.source, source_url, observation.outcome.reading)
         return batch([item], self._new_id())
 
+
+class CuantoCuestaLog(_Batches):
+    """Logs the batch each accepted reading would be sent in, as one JSON line. It sends
+    nothing."""
+
     async def send(self, series: Series, observation: Observation) -> None:
         payload = self.payload(series, observation)
-        logger.info("cuanto-cuesta batch, not sent: %s", json.dumps(payload, separators=(",", ":")))
+        logger.info("cuanto-cuesta batch, not sent: %s", _json(payload).decode())
+
+
+class CuantoCuestaIngest(_Batches):
+    """Posts each batch to cuanto-cuesta's ``POST /api/ingest`` and logs the outcome.
+
+    Nothing is retried and nothing raises: a value that does not get through is logged and
+    dropped, and the next run sends a newer one. The log tells three cases apart:
+
+    - cuanto-cuesta answered 200: one line per item with its status, ``stored``, ``unchanged``,
+      ``older``, or ``rejected`` with its error code;
+    - it refused the whole batch: ``401`` is a wrong or missing token, a configuration problem
+      no later run fixes, so its line says ``CONFIGURATION``; ``400``, ``413`` and ``422`` are a
+      batch this runner built wrong;
+    - it did not answer, or answered outside its contract (a 5xx, a 404 from a wrong URL).
+    """
+
+    def __init__(
+        self,
+        series: Iterable[Series],
+        sources: Mapping[str, Source],
+        client: httpx.AsyncClient,
+        url: str,
+        token: str,
+        new_id: Callable[[], UUID] = uuid4,
+        send_timeout: float = SEND_TIMEOUT_SECONDS,
+    ) -> None:
+        super().__init__(series, sources, new_id)
+        self._client = client
+        self._url = url
+        self._headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        self._send_timeout = send_timeout
+
+    async def send(self, series: Series, observation: Observation) -> None:
+        payload = self.payload(series, observation)
+        body = _json(payload)
+        what = f"cuanto-cuesta batch {payload['batch_id']} ({series.id})"
+        if len(body) > MAX_BYTES:
+            # cuanto-cuesta would answer 413. One item is far under it, so this is a bug here.
+            logger.error("%s not sent: %d bytes, over %d", what, len(body), MAX_BYTES)
+            return
+        try:
+            async with asyncio.timeout(self._send_timeout):
+                response = await self._client.post(self._url, content=body, headers=self._headers)
+        except TimeoutError:
+            logger.error("%s dropped: no answer in %g s", what, self._send_timeout)
+            return
+        except httpx.HTTPError as error:
+            logger.error("%s dropped: no answer: %s: %s", what, type(error).__name__, error)
+            return
+        _log_response(what, response)
+
+
+def _log_response(what: str, response: httpx.Response) -> None:
+    status = response.status_code
+    if status == httpx.codes.OK:
+        if (results := _results(response)) is None:
+            logger.error("%s: answered 200 with an unexpected body: %.200s", what, response.text)
+            return
+        for result in results:
+            _log_result(what, result)
+        return
+    code = _error_code(response)
+    if status == httpx.codes.UNAUTHORIZED:
+        logger.error(
+            "%s dropped: CONFIGURATION: the token was refused (HTTP 401 %s); check that"
+            " CUANTO_CUESTA_INGEST_TOKEN holds cuanto-cuesta's INGEST_TOKEN",
+            what,
+            code,
+        )
+    elif status in (
+        httpx.codes.BAD_REQUEST,
+        httpx.codes.REQUEST_ENTITY_TOO_LARGE,
+        httpx.codes.UNPROCESSABLE_ENTITY,
+    ):
+        logger.error("%s dropped: the batch was refused (HTTP %d %s)", what, status, code)
+    else:
+        logger.error("%s dropped: unexpected answer (HTTP %d %s)", what, status, code)
+
+
+def _results(response: httpx.Response) -> list[dict[str, object]] | None:
+    """The per-item results of a 200, or None when the body is not what the contract says."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    results = body.get("results") if isinstance(body, dict) else None
+    if not isinstance(results, list) or not all(isinstance(r, dict) for r in results):
+        return None
+    return results
+
+
+def _log_result(what: str, result: dict[str, object]) -> None:
+    key = result.get("key")
+    match result.get("status"):
+        case "stored" | "unchanged" as status:
+            logger.info("%s: %s %s", what, key, status)
+        case "older":
+            # cuanto-cuesta already holds a quote observed after this one, and keeps it.
+            logger.warning("%s: %s older than the current quote, ignored", what, key)
+        case "rejected":
+            logger.error("%s: %s rejected, %s", what, key, result.get("error"))
+        case _:
+            logger.error("%s: %s unexpected result %s", what, key, result)
+
+
+def _error_code(response: httpx.Response) -> str:
+    """The ``error`` code of a refused request, as cuanto-cuesta sends it in ``{"error": code}``."""
+    try:
+        body = response.json()
+    except ValueError:
+        return "without an error code"
+    if isinstance(body, dict) and isinstance(code := body.get("error"), str):
+        return code
+    return "without an error code"
+
+
+def _json(payload: dict[str, object]) -> bytes:
+    return json.dumps(payload, separators=(",", ":")).encode()

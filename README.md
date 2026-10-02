@@ -10,7 +10,7 @@ value to the app it feeds. For now it builds the batch cuanto-cuesta's ingest AP
 it without sending it ([docs/plan.md](docs/plan.md), step 1).
 
 The API with its own Postgres, which stored every attempt and served the last accepted values,
-is still in the code but no longer runs in the image; step 4 of the plan removes it.
+is still in the code but no longer runs in the image; step 3 of the plan removes it.
 
 ## The runner
 
@@ -221,6 +221,8 @@ Settings come from the environment:
 | `RUN_SCHEDULER` | `true` | `false` serves the API without collecting |
 | `CORS_ORIGINS` | none | comma-separated origins allowed to read the API from a browser |
 | `SERIES_FILE` | `config/series.yaml` in a checkout | set in the image |
+| `CUANTO_CUESTA_INGEST_URL` | none | the runner: cuanto-cuesta's `POST /api/ingest`, on the internal network |
+| `CUANTO_CUESTA_INGEST_TOKEN` | none | the runner: its bearer token, cuanto-cuesta's `INGEST_TOKEN`. Without it or the URL, batches are only logged |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the conventions and how to run the checks.
 
