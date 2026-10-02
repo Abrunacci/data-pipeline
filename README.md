@@ -223,3 +223,21 @@ Settings come from the environment:
 | `SERIES_FILE` | `config/series.yaml` in a checkout | set in the image |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the conventions and how to run the checks.
+
+## Deploying
+
+CI deploys what lands on `main`: it pushes the image to `ghcr.io/abrunacci/data-pipeline`, then
+asks the server, over SSH, to switch to it by digest. The server keeps the new container only if
+its `HEALTHCHECK` turns healthy, and otherwise puts back the previous release. The server side
+(the project's entry, the deploy key, rollbacks) lives in the infra repository.
+
+The `production` environment, limited to `main`, holds everything the deploy job reads. None of it
+is in the repository:
+
+| Name | Kind | |
+|---|---|---|
+| `DEPLOY_SSH_KEY` | secret | the private deploy key |
+| `DEPLOY_KNOWN_HOSTS` | secret | the server's host key line; `[host]:port` when the port is not 22 |
+| `DEPLOY_HOST` | variable | the server's name |
+| `DEPLOY_PORT` | variable | its SSH port |
+| `DEPLOY_USER` | variable | the user the deploy key is restricted to |

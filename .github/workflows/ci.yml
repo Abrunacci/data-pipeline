@@ -91,3 +91,82 @@ jobs:
           --cap-drop ALL --security-opt no-new-privileges data-pipeline:ci
           sh -c '! python -m data_pipeline.runner.heartbeat && touch /tmp/alive
           && python -m data_pipeline.runner.heartbeat'
+
+  # What lands on main is published and deployed; pull requests and the weekly run never are.
+  publish:
+    needs: [check, image]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The only job that writes: the image to GHCR, with the job's own token.
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # The tag is the commit; the server deploys by digest, so a tag moved later changes nothing.
+      # The source label links the package to this repository.
+      - name: Build and push
+        id: push
+        env:
+          IMAGE: ghcr.io/abrunacci/data-pipeline
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s\n' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker build --tag "$IMAGE:$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" .
+          docker push "$IMAGE:$GITHUB_SHA"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$GITHUB_SHA")"
+          digest="${digest#*@}"
+          docker logout ghcr.io
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::unexpected image digest: '$digest'"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+  # The server pulls the image by digest and switches to it only if its HEALTHCHECK turns healthy;
+  # otherwise it puts back the previous release (infra: ansible/README.md, "Deploying a backend").
+  deploy:
+    needs: [publish]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Its secrets and variables exist only in this environment, which only main can use.
+    environment: production
+    permissions: {}
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      # The host, port and user come from the environment's variables, never from this file: the
+      # repository is public. The key can only run deploy-backend for this project.
+      - name: Deploy
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          for name in DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS DEPLOY_HOST DEPLOY_PORT DEPLOY_USER DIGEST; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::$name is empty: set it in the production environment"
+              exit 1
+            fi
+          done
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # StrictHostKeyChecking: only the server in DEPLOY_KNOWN_HOSTS is trusted. On a port
+          # other than 22, its line must be written as [host]:port (ssh-keyscan -p does that).
+          ssh -i ~/.ssh/deploy -p "$DEPLOY_PORT" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes -o ConnectTimeout=15 "$DEPLOY_USER@$DEPLOY_HOST" \
+            deploy-backend "$GITHUB_SHA" "$DIGEST" "$GITHUB_RUN_ID" </dev/null
