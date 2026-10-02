@@ -1,5 +1,6 @@
-"""The values the pipeline publishes must be ones the cuanto-cuesta calculator accepts, and the
-plausible ranges must match the ones it warns with.
+"""The values the pipeline publishes must be ones the cuanto-cuesta calculator accepts, the
+plausible ranges must match the ones it warns with, and each rate must go with the pair its
+ingest API expects.
 
 Set ``CUANTO_CUESTA_DIR`` to a checkout of https://github.com/Abrunacci/cuanto-cuesta to run
 these; CI checks it out. Without it they are skipped.
@@ -13,9 +14,11 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+import yaml
 
 from data_pipeline.config import DEFAULT_SERIES_FILE, load_series
 from data_pipeline.core.checks import MAX_DECIMALS, MAX_VALUE
+from data_pipeline.destinations.cuanto_cuesta import RATES
 from data_pipeline.sources import available_history_sources, available_sources
 
 CALCULATOR = os.environ.get("CUANTO_CUESTA_DIR")
@@ -57,3 +60,17 @@ def test_plausible_ranges_match_the_calculator_warnings() -> None:
         assert series.id in checks, f"{series.id} is not a calculator rate"
         plausible = series.rules.plausible
         assert (plausible.min, plausible.max) == checks[series.id], series.id
+
+
+def test_each_rate_is_sent_with_the_pair_cuanto_cuesta_ingests() -> None:
+    assert CALCULATOR is not None
+    path = Path(CALCULATOR) / "backend" / "config" / "rates.yaml"
+    if not path.exists():
+        pytest.skip("cuanto-cuesta's checkout has no backend/config/rates.yaml yet")
+    rates = yaml.safe_load(path.read_text(encoding="utf-8"))["rates"]
+    theirs = {
+        rate["key"]: (rate["base"], rate["quote"], rate.get("estimated_final", False))
+        for rate in rates
+    }
+    ours = {key: (r.base, r.quote, r.estimated_final) for key, r in RATES.items()}
+    assert ours == theirs

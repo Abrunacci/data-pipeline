@@ -10,6 +10,7 @@ import pytest
 from data_pipeline.config import (
     DEFAULT_SERIES_FILE,
     ConfigError,
+    RunnerSettings,
     Settings,
     load_gap_samples,
     load_series,
@@ -232,3 +233,8 @@ def test_cors_origins_are_read_as_a_comma_separated_list(
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://localhost/test")
     monkeypatch.setenv("CORS_ORIGINS", "https://a.example, https://b.example,")
     assert Settings().cors_origins == ("https://a.example", "https://b.example")
+
+
+def test_the_runner_needs_no_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert RunnerSettings().series_file == DEFAULT_SERIES_FILE

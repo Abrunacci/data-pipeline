@@ -9,6 +9,9 @@ import httpx
 
 from data_pipeline.core.sources import Request
 
+# For the client: every source answers in well under a second; a slow one fails and the next
+# slot tries again.
+CLIENT_TIMEOUT = httpx.Timeout(10.0)
 # Waits before each retry. Two retries keep a run well inside its interval and far from any
 # source's rate limit.
 RETRY_DELAYS: Sequence[float] = (1.0, 3.0)

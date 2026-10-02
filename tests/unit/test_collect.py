@@ -10,7 +10,15 @@ import httpx
 import pytest
 
 from data_pipeline.core.checks import Range, Rules
-from data_pipeline.core.readings import Accepted, Control, Reading, Rejected, Rejection, Suspect
+from data_pipeline.core.readings import (
+    Accepted,
+    Control,
+    Observation,
+    Reading,
+    Rejected,
+    Rejection,
+    Suspect,
+)
 from data_pipeline.core.schedule import OpeningHours
 from data_pipeline.core.series import Series
 from data_pipeline.core.sources import MalformedResponseError, Request, Source
@@ -257,6 +265,14 @@ async def test_a_suspect_does_not_try_the_fallback() -> None:
     assert len(outcomes) == 1
 
 
+class Recorder:
+    def __init__(self) -> None:
+        self.sent: list[Observation] = []
+
+    async def send(self, series: Series, observation: Observation) -> None:
+        self.sent.append(observation)
+
+
 class TestSlots:
     def test_slots_are_aligned_to_the_clock(self) -> None:
         assert slot_start(NOW, timedelta(minutes=10)) == datetime(2026, 9, 25, 18, 0, tzinfo=UTC)
@@ -296,6 +312,29 @@ class TestSlots:
         store.busy.add("rate")
         assert not await run_slot(SERIES, SOURCES, http({}), store, lambda: NOW)
         assert store.observations == []
+
+    async def test_an_accepted_reading_is_sent_and_a_held_back_one_is_not(self) -> None:
+        destination = Recorder()
+        store = MemoryStore()
+        later = NOW + timedelta(minutes=10)
+        client = http({"primary": [ok("1600"), ok("1900")]})
+        assert await run_slot(SERIES, SOURCES, client, store, lambda: NOW, destination)
+        assert await run_slot(SERIES, SOURCES, client, store, lambda: later, destination)
+        assert [o.outcome for o in destination.sent] == [Accepted(Reading(Decimal(1600), NOW))]
+        assert isinstance(store.observations[-1].outcome, Suspect)
+
+    async def test_a_failing_destination_drops_the_value_and_keeps_the_run(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class Broken:
+            async def send(self, series: Series, observation: Observation) -> None:
+                raise RuntimeError("unreachable")
+
+        store = MemoryStore()
+        client = http({"primary": [ok("1600")]})
+        assert await run_slot(SERIES, SOURCES, client, store, lambda: NOW, Broken())
+        assert isinstance(store.observations[0].outcome, Accepted)
+        assert "sending rate failed; the value is dropped" in caplog.messages
 
     async def test_a_failing_run_does_not_stop_the_schedule(self) -> None:
         class BrokenStore(MemoryStore):

@@ -31,16 +31,27 @@ from data_pipeline.core.sources import HistorySource, Source
 DEFAULT_SERIES_FILE = Path(__file__).resolve().parents[2] / "config" / "series.yaml"
 
 
-class Settings(BaseSettings):
+class RunnerSettings(BaseSettings):
+    """What the runner needs: it has no database."""
+
     model_config = SettingsConfigDict(frozen=True)
+
+    series_file: Path = DEFAULT_SERIES_FILE
+    contact_url: str = "https://github.com/Abrunacci/data-pipeline"
+
+    @property
+    def user_agent(self) -> str:
+        return f"data-pipeline (+{self.contact_url})"
+
+
+class Settings(RunnerSettings):
+    """The API's: the runner's, plus its database and who may read it."""
 
     # SQLAlchemy URL with the psycopg driver: postgresql+psycopg://user:password@host/db
     database_url: str
-    series_file: Path = DEFAULT_SERIES_FILE
     run_scheduler: bool = True
     # Origins allowed to read the API from a browser, comma separated.
     cors_origins: Annotated[tuple[str, ...], NoDecode] = ()
-    contact_url: str = "https://github.com/Abrunacci/data-pipeline"
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -48,10 +59,6 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return tuple(origin.strip() for origin in value.split(",") if origin.strip())
         return value
-
-    @property
-    def user_agent(self) -> str:
-        return f"data-pipeline (+{self.contact_url})"
 
 
 class ConfigError(Exception):

@@ -32,6 +32,7 @@ from data_pipeline.config import Settings, load_series
 from data_pipeline.core.schedule import BUENOS_AIRES
 from data_pipeline.core.series import Series
 from data_pipeline.core.sources import HistorySource, Source
+from data_pipeline.runner.fetch import CLIENT_TIMEOUT
 from data_pipeline.runner.heartbeat import beat_forever
 from data_pipeline.runner.scheduler import run_series
 from data_pipeline.runner.store import Store
@@ -41,8 +42,6 @@ from data_pipeline.storage.tables import observations
 
 logger = logging.getLogger(__name__)
 
-# Every source answers in well under a second; a slow one fails and the next slot tries again.
-HTTP_TIMEOUT = httpx.Timeout(10.0)
 # A database that does not answer in this long is down, for the health check and the API.
 DATABASE_TIMEOUT_SECONDS = 5
 HEALTH_TIMEOUT_SECONDS = 3
@@ -61,7 +60,7 @@ def create_app(settings: Settings) -> FastAPI:
         lock_engine = _create_engine(settings.database_url, pooled=False)
         store = PostgresStore(engine, lock_engine)
         async with httpx.AsyncClient(
-            timeout=HTTP_TIMEOUT, headers={"User-Agent": settings.user_agent}
+            timeout=CLIENT_TIMEOUT, headers={"User-Agent": settings.user_agent}
         ) as client:
             app.state.engine = engine
             app.state.store = store
