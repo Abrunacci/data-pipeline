@@ -1,7 +1,6 @@
 # Plan: from API with a database to a runner that pushes
 
-Status: proposed, 2026-10-01; open questions answered 2026-10-02. No code for these steps until
-it is approved.
+Status: approved 2026-10-02, with cuanto-cuesta's contract closed the same day.
 
 ## Where it goes
 
@@ -27,20 +26,35 @@ The target is a runner with no database and no HTTP of its own:
   stale), and when accepted it is logged as accepted with **no reference**.
 - If cuanto-cuesta does not answer, the value is logged and dropped. No queue: the next run sends
   a newer one.
-- For `binance_card_usd_usdt` it sends the listed `price` and `estimated_final`, or only `price`
-  when there is no estimate. The gap and its CSV stay here.
+- For `binance_card_usd_usdt` it sends the listed `price` and always `estimated_final`, which is
+  `null` when there is no estimate (cuanto-cuesta rejects a card item without it). No other key
+  carries `estimated_final`. The gap and its CSV stay here.
 - Fees stay manual in cuanto-cuesta; this runner sends none.
 
-The contract is cuanto-cuesta's (its PR 1). The starting point is:
+The contract is cuanto-cuesta's, closed in its PR 1 (`backend/README.md`, "API", on its branch
+`feat/rates-backend`). What the runner has to respect:
 
 ```json
-{"batch_id": "...", "rates": [{"key": "bitso_usdt_ars", "base": "USDT", "quote": "ARS",
-  "price": "1452.30", "source": "bitso_api", "source_url": "https://...",
-  "observed_at": "2026-09-30T15:00:00Z"}]}
+{"batch_id": "<UUID>", "rates": [
+  {"key": "bitso_usdt_ars", "base": "USDT", "quote": "ARS", "price": "1452.30",
+   "source": "bitso_usdt_ars_bid", "source_url": "https://...", "observed_at": "2026-10-01T15:00:00Z"},
+  {"key": "binance_card_usd_usdt", "base": "USD", "quote": "USDT", "price": "0.9850",
+   "estimated_final": null, "source": "...", "source_url": "https://...", "observed_at": "..."}]}
 ```
 
-with an `estimated_final` next to `price` for the card. Amounts are decimal strings, errors are
-codes.
+- `POST /api/ingest`, with `Authorization: Bearer`, on the internal network only.
+- `base` and `quote` are fixed per key (`mep` USD/ARS, `binance_p2p_usdt_usd` USDT/USD,
+  `bitso_usdt_ars` USDT/ARS, `arq_usd_ars` USD/ARS, `binance_card_usd_usdt` USD/USDT); an
+  inverted pair rejects the item.
+- `price` and `estimated_final` are positive decimal strings with up to 10 places, no exponent;
+  `source` is `[a-z0-9_]{1,64}`; `source_url` is `https` or `null`; `observed_at` is RFC 3339
+  with a zone. Any other field rejects the item.
+- At most 20 items and 64 KB per request. One batch per series run is one item (two values for
+  the card, in the same item), far under both.
+- `200` with one result per item: `stored`, `unchanged`, `older`, or `rejected` with an `error`
+  code. The whole request is refused with `401`, `400`, `422` or `413`.
+- `GET /api/rates` is public (no token) and returns the current quote of each rate that has one,
+  and `server_time`.
 
 ## Steps
 
@@ -75,25 +89,26 @@ configuration (`DESTINATION=log|http`), so going back to logging is an environme
 
 - Usable: cuanto-cuesta gets live values.
 - Undo: `DESTINATION=log`, or revert.
-- cuanto-cuesta: PR 1 merged (endpoint, contract, error codes, token check) and its backend
-  deployed. Today it is a static site with no backend.
+- Logs: each item's result; a `rejected` item with its `error` code, and a refused request with
+  its status and code. Nothing is retried.
+- cuanto-cuesta: PR 1 merged and its backend deployed. Today it is a static site with no backend.
 - infra:
   - a network path from this container to cuanto-cuesta's backend. Today an internal backend
     is only on its own `outbound` network, and nothing else can reach it or be reached from it;
-  - a manual secret for this project (the token, for example `CUANTO_CUESTA_TOKEN`) and its
-    counterpart on cuanto-cuesta's side;
+  - a manual secret for this project, `CUANTO_CUESTA_INGEST_TOKEN`. It holds the same value as
+    cuanto-cuesta's `INGEST_TOKEN`, which infra generates; it is named after its destination
+    because this runner will feed other apps;
   - the endpoint's internal URL as a non-secret `env` value.
 
 ### 3. State read from cuanto-cuesta on start
 
-Before the first run, the runner asks cuanto-cuesta for the current value of each rate and uses
-them as the last accepted values.
+Before the first run, the runner reads cuanto-cuesta's `GET /api/rates` and uses each rate's
+`price` as its last accepted value. A rate cuanto-cuesta has no quote for starts empty.
 
 - Usable: after a restart, the first reading is checked against the value cuanto-cuesta holds.
   Only when cuanto-cuesta does not answer within the retries does it start empty.
 - Undo: revert; the runner starts empty again, as in steps 1 and 2.
-- cuanto-cuesta: a read endpoint for the current values, with the same token. It is not in the
-  starting contract, so it has to be added to its PR 1 or a later one.
+- cuanto-cuesta: nothing beyond step 2; `GET /api/rates` is in its PR 1, public, with no token.
 - infra: nothing beyond step 2.
 
 ### 4. Remove the database and the API
