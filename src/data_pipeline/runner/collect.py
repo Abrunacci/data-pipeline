@@ -14,7 +14,7 @@ from data_pipeline.core.readings import Control, Observation, Reading, Rejected,
 from data_pipeline.core.series import Series
 from data_pipeline.core.sources import MalformedResponseError, NoQuoteError, Source
 from data_pipeline.runner.fetch import FetchError, fetch
-from data_pipeline.runner.store import Store
+from data_pipeline.runner.store import SeriesStore
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ async def collect(
     series: Series,
     sources: Mapping[str, Source],
     client: httpx.AsyncClient,
-    store: Store,
+    store: SeriesStore,
     now: Clock,
 ) -> list[Observation]:
     """Try the sources of ``series`` in order and stop at the first valid reading, then read

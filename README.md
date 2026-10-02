@@ -4,9 +4,36 @@ Scheduled collection of market data, with validation and history. It collects th
 the [cuanto-cuesta](https://cuanto-cuesta.abrunacci.dev) calculator needs today, and it is meant
 to take other datasets later.
 
-Each series is read on a schedule from its sources, checked, and stored with every attempt,
-failed or not. A small API publishes the last accepted value of each series, always with when the
-source says it is from.
+Each series is read on a schedule from its sources and checked. What the image runs is the
+**runner**: it keeps what the checks need in memory, logs every attempt, and hands each accepted
+value to the app it feeds. For now it builds the batch cuanto-cuesta's ingest API takes and logs
+it without sending it ([docs/plan.md](docs/plan.md), step 1).
+
+The API with its own Postgres, which stored every attempt and served the last accepted values,
+is still in the code but no longer runs in the image; step 4 of the plan removes it.
+
+## The runner
+
+```sh
+uv run python -m data_pipeline.runner           # until SIGTERM or Ctrl-C
+uv run python -m data_pipeline.runner --check   # load the configuration and exit
+docker compose up --build runner                # the image, as the server runs it
+```
+
+It needs no settings: `SERIES_FILE` and `CONTACT_URL` (for the `User-Agent`) have defaults. One
+line per attempt, for example:
+
+```
+INFO data_pipeline.runner.memory: bitso_usdt_ars bitso_usdt_ars_bid accepted 1615.3 (no reference)
+INFO data_pipeline.destinations.cuanto_cuesta: cuanto-cuesta batch, not sent: {"batch_id":"…","rates":[{"key":"bitso_usdt_ars","base":"USDT","quote":"ARS","price":"1615.3","source":"bitso_usdt_ars_bid","source_url":"https://api.bitso.com/v3/ticker/?book=usdt_ars","observed_at":"2026-09-25T18:03:30Z"}]}
+```
+
+- It starts with no state, so the first accepted value of each series after a start has nothing
+  to check a jump against: it still passes the per-reading checks (plausible range, not stale),
+  and its line says `no reference`.
+- Held-back, control and rejected readings are logged, never sent.
+- `binance_card_usd_usdt` always carries `estimated_final`, `null` when there is no estimate or
+  cuanto-cuesta would refuse it; no other rate carries it.
 
 ## What it collects
 
@@ -157,12 +184,12 @@ file is missing or older than 2 minutes. `/health` says the database answers; th
 the process is alive. See `docker ps` or
 `docker inspect --format '{{json .State.Health}}' <container>`.
 
-## Running it
+## Running the API
 
-With Docker:
+The API needs Postgres. With Docker:
 
 ```sh
-docker compose up --build        # Postgres, migrations, then the app on http://localhost:8000
+docker compose up --build app    # Postgres, migrations, then the app on http://localhost:8000
 ```
 
 It runs like the server: migrations as the database owner, the app as a role with only the

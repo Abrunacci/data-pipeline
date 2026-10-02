@@ -8,9 +8,12 @@ import sys
 from pathlib import Path
 
 import data_pipeline.core
+import data_pipeline.destinations
 import data_pipeline.runner.heartbeat
 
 CORE = Path(data_pipeline.core.__file__).parent
+DESTINATIONS = Path(data_pipeline.destinations.__file__).parent
+PACKAGE = CORE.parent
 
 
 def imported_modules(path: Path) -> set[str]:
@@ -36,3 +39,25 @@ def test_the_health_check_imports_only_the_standard_library() -> None:
     path = Path(data_pipeline.runner.heartbeat.__file__)
     for module in imported_modules(path):
         assert module.split(".")[0] in sys.stdlib_module_names, f"heartbeat imports {module}"
+
+
+def test_destinations_import_only_core_and_libraries() -> None:
+    # They know an app's contract, not how the runner works.
+    for path in sorted(DESTINATIONS.glob("*.py")):
+        for module in imported_modules(path):
+            if module.startswith("data_pipeline."):
+                assert module.startswith("data_pipeline.core"), f"{path.name} imports {module}"
+
+
+def test_nothing_imports_the_api_or_storage_into_the_runner() -> None:
+    # The runner runs with no database: its modules must load without SQLAlchemy or FastAPI.
+    runner = [*sorted((PACKAGE / "runner").glob("*.py")), *sorted(DESTINATIONS.glob("*.py"))]
+    for path in runner:
+        for module in imported_modules(path):
+            top = module.split(".")
+            assert top[:2] not in (["data_pipeline", "api"], ["data_pipeline", "storage"]), (
+                f"{path.name} imports {module}"
+            )
+            assert top[0] not in ("sqlalchemy", "fastapi", "uvicorn", "alembic"), (
+                f"{path.name} imports {module}"
+            )

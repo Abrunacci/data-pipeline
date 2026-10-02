@@ -17,7 +17,7 @@ from decimal import Decimal
 from fractions import Fraction
 from statistics import median
 
-from data_pipeline.core.checks import SMALLEST_STEP
+from data_pipeline.core.checks import SMALLEST_STEP, canonical, value_problem
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +83,15 @@ def estimate_final(listed: Decimal, gap: Gap) -> Decimal:
     gives 0.95453378. It may round to 0: callers check it like any value."""
     steps = math.floor(Fraction(listed) * gap.kept / Fraction(SMALLEST_STEP))
     return Decimal(steps) * SMALLEST_STEP
+
+
+def publishable_estimate(listed: Decimal, gap: Gap) -> Decimal | None:
+    """``estimate_final`` without trailing zeros, or None when it is not a value the calculator
+    would accept: a gap near 100 % from a mistyped observation rounds it to 0."""
+    estimate = estimate_final(listed, gap)
+    if value_problem(estimate) is not None:
+        return None
+    return canonical(estimate)
 
 
 def summarize(samples: Sequence[GapSample]) -> Gap | None:

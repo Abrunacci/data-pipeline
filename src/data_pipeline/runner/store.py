@@ -1,4 +1,6 @@
-"""What the runner and the API need from storage. Postgres implements it in ``storage``."""
+"""What the runner and the API need from storage. ``SeriesStore`` is what running a series
+needs: ``runner.memory`` keeps it in memory, and Postgres implements the whole ``Store`` in
+``storage``."""
 
 from __future__ import annotations
 
@@ -55,12 +57,28 @@ class Latest:
     last_attempt_at: datetime | None
 
 
-class Store(Protocol):
+class SeriesStore(Protocol):
     async def record(self, observation: Observation) -> None: ...
 
     async def state(self, series_id: str, since: datetime) -> SeriesState:
         """The last accepted value, and the suspects after it fetched at or after ``since``."""
         ...
+
+    async def attempted_in(self, series_id: str, start: datetime, end: datetime) -> bool:
+        """Whether the last attempt recorded for the series was fetched in ``[start, end)``.
+
+        A last attempt after ``end`` does not count: it was stamped by a clock that ran ahead
+        and has since been corrected, and the current slot still has to run.
+        """
+        ...
+
+    def exclusive(self, series_id: str) -> AbstractAsyncContextManager[bool]:
+        """Try to become the only runner of the series; yields False if another one is."""
+        ...
+
+
+class Store(SeriesStore, Protocol):
+    """A ``SeriesStore`` that also keeps the history the API serves."""
 
     async def latest(self, series_id: str) -> Latest: ...
 
@@ -77,16 +95,4 @@ class Store(Protocol):
     async def daily(self, series_id: str, first: date, last: date, zone: ZoneInfo) -> Sequence[Day]:
         """One value per day from ``first`` to ``last`` (days in ``zone``), for the days that
         have one: the published or loaded value with the latest ``as_of`` of that day."""
-        ...
-
-    async def attempted_in(self, series_id: str, start: datetime, end: datetime) -> bool:
-        """Whether the last attempt recorded for the series was fetched in ``[start, end)``.
-
-        A last attempt after ``end`` does not count: it was stamped by a clock that ran ahead
-        and has since been corrected, and the current slot still has to run.
-        """
-        ...
-
-    def exclusive(self, series_id: str) -> AbstractAsyncContextManager[bool]:
-        """Try to become the only runner of the series; yields False if another one is."""
         ...

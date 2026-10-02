@@ -59,14 +59,31 @@ jobs:
         with:
           persist-credentials: false
       - run: docker build --tag data-pipeline:ci .
-      # Run it the way the server does (read-only, its uid, no capabilities): the migrations
-      # are there, and the app builds, which loads and checks the series file. Building the app
-      # does not connect to the database.
+      # Run it the way the server does (read-only, its uid, no capabilities, no network): the
+      # runner's configuration loads with no database, and so does the API's, until step 4 of
+      # docs/plan.md removes it. Neither connects to anything.
+      - run: >-
+          docker run --rm --network none --read-only --tmpfs /tmp --user 10005:10005
+          --cap-drop ALL --security-opt no-new-privileges data-pipeline:ci
+          python -m data_pipeline.runner --check
       - run: >-
           docker run --rm --network none --read-only --tmpfs /tmp --user 10005:10005
           --cap-drop ALL --security-opt no-new-privileges
           --env DATABASE_URL=postgresql+psycopg://unused@localhost/unused data-pipeline:ci
           sh -c 'alembic history && python -c "from data_pipeline.api.main import app; app()"'
+      # The image's own command, as the server starts it. With no network its sources fail and
+      # say so in the log, but it stays up and Docker reports it healthy: what a deploy waits for.
+      - run: |
+          docker run --detach --name runner --network none --read-only --tmpfs /tmp \
+            --user 10005:10005 --cap-drop ALL --security-opt no-new-privileges data-pipeline:ci
+          for _ in $(seq 30); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' runner)"
+            if [[ "$status" == healthy ]]; then break; fi
+            sleep 2
+          done
+          docker logs runner
+          docker rm --force runner
+          [[ "$status" == healthy ]]
       # The HEALTHCHECK command in the same conditions: it fails without the heartbeat file and
       # passes once the file is there.
       - run: >-

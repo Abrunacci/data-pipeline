@@ -42,6 +42,6 @@ EXPOSE 8000
 # - retries 3: one slow check under load does not flip it; three in a row do.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s --retries=3 \
     CMD ["python", "-m", "data_pipeline.runner.heartbeat"]
-# One worker: the scheduler runs inside the process, and one is plenty for a few reads a minute.
-CMD ["uvicorn", "--factory", "data_pipeline.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", \
-     "--timeout-graceful-shutdown", "10"]
+# The runner: no database and no HTTP of its own (docs/plan.md, step 1). The API still runs from
+# this image with an explicit command, as compose.yml does, until step 4 removes it.
+CMD ["python", "-m", "data_pipeline.runner"]

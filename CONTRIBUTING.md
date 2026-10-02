@@ -26,14 +26,19 @@ Packages under `src/data_pipeline/`:
 - `sources/`: one adapter per source. A source builds its request and parses the response; it
   never does I/O itself, so every source is tested against recorded responses.
 - `runner/`: sends requests (timeout and retries live here only), runs a series through its
-  sources, and schedules runs. It defines the `Store` protocol it needs.
+  sources, and schedules runs. It defines the `SeriesStore` and `Destination` protocols it needs,
+  keeps the state in memory (`memory.py`), and is the entry point of the image
+  (`python -m data_pipeline.runner`).
+- `destinations/`: one module per app the runner feeds, with the contract that app owns. It
+  imports only `core` (a test enforces it).
 - `storage/`: Postgres. The schema and the `Store` implementation.
 - `api/`: FastAPI, and the composition root. Its `lifespan` creates the engine, the HTTP client,
   the store and the scheduler tasks; there are no module-level instances.
 - `config.py`: settings from the environment and the series from `config/series.yaml`.
 
 Dependencies point inwards: everything may import `core`, `core` imports nothing else, and
-nothing imports `api`.
+nothing imports `api`. The runner and the destinations never import `api` or `storage`, so the
+image starts without a database.
 
 ## Series and sources
 
