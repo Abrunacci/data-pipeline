@@ -84,13 +84,16 @@ the code, unused.
 
 ### 2. HTTP destination to cuanto-cuesta
 
-A second destination posts each batch to cuanto-cuesta's ingest endpoint. Which one runs is
-configuration (`DESTINATION=log|http`), so going back to logging is an environment change.
+A second destination posts each batch to cuanto-cuesta's ingest endpoint. It runs when both
+`CUANTO_CUESTA_INGEST_URL` and `CUANTO_CUESTA_INGEST_TOKEN` are set; with either missing, the
+runner logs the batches as in step 1 and says so once at start. So the deploy does not depend on
+the order infra applies its part in, and going back to logging is an environment change.
 
 - Usable: cuanto-cuesta gets live values.
-- Undo: `DESTINATION=log`, or revert.
+- Undo: unset either variable, or revert.
 - Logs: each item's result; a `rejected` item with its `error` code, and a refused request with
-  its status and code. Nothing is retried.
+  its status and code. A `401` is a wrong token, a configuration problem, and its line says
+  `CONFIGURATION`. Nothing is retried; a value cuanto-cuesta does not answer for is dropped.
 - cuanto-cuesta: PR 1 merged and its backend deployed. Today it is a static site with no backend.
 - infra:
   - a network path from this container to cuanto-cuesta's backend. Today an internal backend
@@ -98,7 +101,7 @@ configuration (`DESTINATION=log|http`), so going back to logging is an environme
   - a manual secret for this project, `CUANTO_CUESTA_INGEST_TOKEN`. It holds the same value as
     cuanto-cuesta's `INGEST_TOKEN`, which infra generates; it is named after its destination
     because this runner will feed other apps;
-  - the endpoint's internal URL as a non-secret `env` value.
+  - the endpoint's internal URL as a non-secret `env` value, `CUANTO_CUESTA_INGEST_URL`.
 
 ### 3. State read from cuanto-cuesta on start
 

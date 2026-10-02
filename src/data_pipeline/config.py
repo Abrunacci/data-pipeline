@@ -16,6 +16,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    SecretStr,
     StringConstraints,
     ValidationError,
     field_validator,
@@ -38,6 +39,23 @@ class RunnerSettings(BaseSettings):
 
     series_file: Path = DEFAULT_SERIES_FILE
     contact_url: str = "https://github.com/Abrunacci/data-pipeline"
+    # Where accepted values go. With both set, each one is posted to cuanto-cuesta; with either
+    # missing or empty, the batch is only logged, so the runner can deploy before the network
+    # path and the token exist.
+    cuanto_cuesta_ingest_url: str | None = None
+    cuanto_cuesta_ingest_token: SecretStr | None = None
+
+    @field_validator("cuanto_cuesta_ingest_url", "cuanto_cuesta_ingest_token", mode="before")
+    @classmethod
+    def _empty_is_unset(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("cuanto_cuesta_ingest_url")
+    @classmethod
+    def _http_url(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith(("http://", "https://")):
+            raise ValueError(f"must start with http:// or https://, got {value!r}")
+        return value
 
     @property
     def user_agent(self) -> str:

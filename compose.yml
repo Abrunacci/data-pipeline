@@ -39,7 +39,8 @@ services:
       db:
         condition: service_healthy
 
-  # What the server runs: the runner, which needs no database and only logs what it would send.
+  # What the server runs: the runner, which needs no database. With CUANTO_CUESTA_INGEST_URL and
+  # CUANTO_CUESTA_INGEST_TOKEN set it posts each accepted value there; here it only logs them.
   # `docker compose up --build runner`.
   runner:
     image: data-pipeline:local
