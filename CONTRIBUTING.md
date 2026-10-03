@@ -46,7 +46,7 @@ and the scheduler tasks; there are no module-level instances.
 - A source's `name` is logged with every attempt and sent as the value's `source`, so renaming
   one changes what the app shows.
 - Series are declared in `config/series.yaml`: sources in order (the first is the primary, the
-  rest are fallbacks), an optional control source, interval, opening hours and checks. Numbers
+  rest are fallbacks), interval, opening hours and checks. Numbers
   there are read as exact decimals, and times are quoted.
 - Prefer official, documented endpoints, called with the project's `User-Agent` and well inside
   their published rate limits. A series whose source is undocumented says so with
