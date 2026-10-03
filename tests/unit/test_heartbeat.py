@@ -7,10 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from data_pipeline.api.app import create_app
-from data_pipeline.config import Settings
 from data_pipeline.runner.heartbeat import (
-    HEARTBEAT_FILE,
     MAX_AGE_SECONDS,
     beat,
     beat_forever,
@@ -94,15 +91,3 @@ async def test_a_failed_beat_does_not_stop_the_heartbeat(tmp_path: Path) -> None
         await beat_forever(alive, every=30, sleep=sleep)
     assert waits == [30, 30]
     assert not is_fresh(alive)
-
-
-@pytest.mark.anyio
-async def test_the_app_beats_without_the_scheduler() -> None:
-    # The real file the check reads. The lifespan does not connect to the database.
-    HEARTBEAT_FILE.unlink(missing_ok=True)
-    app = create_app(
-        Settings(database_url="postgresql+psycopg://u:p@127.0.0.1:1/db", run_scheduler=False)
-    )
-    async with app.router.lifespan_context(app):
-        await asyncio.sleep(0)
-        assert is_fresh()

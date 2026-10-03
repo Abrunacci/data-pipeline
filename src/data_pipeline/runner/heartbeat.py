@@ -1,9 +1,8 @@
 """The container's liveness signal, for Docker's ``HEALTHCHECK``: the process touches a file
 every few seconds, and the check fails when the file is missing or old.
 
-It proves the event loop is running, not that the sources answer or the database is up: every
-attempt already records that, and ``/health`` checks the database. It beats whether or not the
-scheduler runs, so a container that only serves the API is healthy too.
+It proves the event loop is running, not that the sources or the destination answer: every
+attempt already logs that.
 
 The check is ``python -m data_pipeline.runner.heartbeat``. It imports only the standard library,
 so it starts fast, and it exits 0 when the file is fresh and 1 otherwise.

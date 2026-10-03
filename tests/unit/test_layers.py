@@ -47,17 +47,3 @@ def test_destinations_import_only_core_and_libraries() -> None:
         for module in imported_modules(path):
             if module.startswith("data_pipeline."):
                 assert module.startswith("data_pipeline.core"), f"{path.name} imports {module}"
-
-
-def test_nothing_imports_the_api_or_storage_into_the_runner() -> None:
-    # The runner runs with no database: its modules must load without SQLAlchemy or FastAPI.
-    runner = [*sorted((PACKAGE / "runner").glob("*.py")), *sorted(DESTINATIONS.glob("*.py"))]
-    for path in runner:
-        for module in imported_modules(path):
-            top = module.split(".")
-            assert top[:2] not in (["data_pipeline", "api"], ["data_pipeline", "storage"]), (
-                f"{path.name} imports {module}"
-            )
-            assert top[0] not in ("sqlalchemy", "fastapi", "uvicorn", "alembic"), (
-                f"{path.name} imports {module}"
-            )

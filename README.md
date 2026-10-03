@@ -1,31 +1,36 @@
 # data-pipeline
 
-Scheduled collection of market data, with validation and history. It collects the exchange rates
-the [cuanto-cuesta](https://cuanto-cuesta.abrunacci.dev) calculator needs today, and it is meant
-to take other datasets later.
+A runner that reads data on a schedule, checks it, and sends each accepted value to the app that
+uses it. Today it collects the exchange rates the
+[cuanto-cuesta](https://cuanto-cuesta.abrunacci.dev) calculator needs, and it is meant to take
+other datasets later.
 
-Each series is read on a schedule from its sources and checked. What the image runs is the
-**runner**: it keeps what the checks need in memory, logs every attempt, and hands each accepted
-value to the app it feeds. For now it builds the batch cuanto-cuesta's ingest API takes and logs
-it without sending it ([docs/plan.md](docs/plan.md), step 1).
-
-The API with its own Postgres, which stored every attempt and served the last accepted values,
-is still in the code but no longer runs in the image; step 3 of the plan removes it.
+It has no database and serves no HTTP: it logs every attempt, and the app it feeds stores the
+values. It runs in one container, whose Docker `HEALTHCHECK` says whether it is alive.
 
 ## The runner
 
 ```sh
 uv run python -m data_pipeline.runner           # until SIGTERM or Ctrl-C
 uv run python -m data_pipeline.runner --check   # load the configuration and exit
-docker compose up --build runner                # the image, as the server runs it
+docker compose up --build                       # the image, as the server runs it
 ```
 
-It needs no settings: `SERIES_FILE` and `CONTACT_URL` (for the `User-Agent`) have defaults. One
-line per attempt, for example:
+For development, install [uv](https://docs.astral.sh/uv/) and run `uv sync` first. Settings come
+from the environment, and none is required:
+
+| Variable | Default | |
+|---|---|---|
+| `CUANTO_CUESTA_INGEST_URL` | none | cuanto-cuesta's `POST /api/ingest`, on the internal network |
+| `CUANTO_CUESTA_INGEST_TOKEN` | none | its bearer token, cuanto-cuesta's `INGEST_TOKEN`. Without it or the URL, batches are only logged |
+| `SERIES_FILE` | `config/series.yaml` in a checkout | set in the image |
+| `CONTACT_URL` | this repository | sent in the `User-Agent` |
+
+One line per attempt, and one per item cuanto-cuesta answers for, for example:
 
 ```
-INFO data_pipeline.runner.memory: bitso_usdt_ars bitso_usdt_ars_bid accepted 1615.3 (no reference)
-INFO data_pipeline.destinations.cuanto_cuesta: cuanto-cuesta batch, not sent: {"batch_id":"…","rates":[{"key":"bitso_usdt_ars","base":"USDT","quote":"ARS","price":"1615.3","source":"bitso_usdt_ars_bid","source_url":"https://api.bitso.com/v3/ticker/?book=usdt_ars","observed_at":"2026-09-25T18:03:30Z"}]}
+INFO data_pipeline.runner.memory: bitso_usdt_ars bitso_usdt_ars_bid accepted 1615.3 (checked)
+INFO data_pipeline.destinations.cuanto_cuesta: cuanto-cuesta batch 90a44048-… (bitso_usdt_ars): bitso_usdt_ars stored
 ```
 
 - It starts with no state, so the first accepted value of each series after a start has nothing
@@ -42,7 +47,7 @@ INFO data_pipeline.destinations.cuanto_cuesta: cuanto-cuesta batch, not sent: {"
 | `mep` | ARS paid for each USD sold through the MEP (buy side) | [DolarApi](https://dolarapi.com/docs/argentina/operations/get-dolar-bolsa.html) → Ámbito | 15 min, weekdays 10:45–17:30 Buenos Aires |
 | `binance_p2p_usdt_usd` | USD paid for each USDT on Binance P2P: median of the 5 cheapest merchant ads that take 500 USD, from merchants with 95 % of orders completed | [Binance P2P public API](https://www.binance.com/en/skills/detail/binance/p2p) | 10 min |
 | `bitso_usdt_ars` | ARS paid for each USDT sold on Bitso (best bid) | [Bitso public API](https://docs.bitso.com/bitso-api/docs/ticker) → CriptoYa | 10 min |
-| `binance_card_usd_usdt` | USDT Binance lists for each USD paid with a card: **indicative**, with `final_price_gap` | [Binance fiat public API](https://www.binance.com/en/skills/detail/binance/fiat) | 10 min |
+| `binance_card_usd_usdt` | USDT Binance lists for each USD paid with a card: **indicative**, sent with `estimated_final` | [Binance fiat public API](https://www.binance.com/en/skills/detail/binance/fiat) | 10 min |
 | `arq_usd_ars` | ARS ARQ pays for each USDc, at par with USD (its bid) | ARQ's ticker (undocumented, so `official_source: false`), CriptoYa as fallback → CriptoYa | 10 min |
 
 The series ids are the ones the calculator uses. For the card price, see
@@ -59,8 +64,8 @@ The series ids are the ones the calculator uses. For the card price, see
 4. **Cross-check** it with the series' control source, a second source read every run and
    never published.
 5. **Hold back** a value that jumped more than the series allows (5 %, 2 % for P2P) from the
-   last published one, or that the control disagrees with by more than 1.5 %. The previous
-   value stays published, marked `pending_confirmation`, until the value confirms itself:
+   last published one, or that the control disagrees with by more than 1.5 %. Nothing is sent
+   until the value confirms itself:
    - a jump, at once if the control agrees, or when the next two readings jumped the same
      way (the market moved, even if it keeps moving);
    - a disagreement, when the next two readings also disagree with the control and stay
@@ -69,7 +74,7 @@ The series ids are the ones the calculator uses. For the card price, see
    A real move shows within two more runs; a one-off glitch never does. Held-back values
    expire after three intervals, so an old one cannot confirm a new jump after an outage.
 
-Every attempt is stored with its outcome and reason, so the history shows the failures too.
+Every attempt is logged with its outcome and reason, failures included.
 
 ## Card price gap
 
@@ -91,11 +96,10 @@ estimated from observed pairs, written down by hand in
 
 The published gap is the median over every row of the price gap, fee aside:
 `1 - (final_usdt / (fiat_amount_usd - fee_usd)) / (list_usdt / fiat_amount_usd)`, with how many
-rows there are and their first and last dates. The API also publishes `estimated_final`, the
-final price, fee aside, that the gap predicts for the current listed price: `value * (1 - gap)`,
+rows there are and their first and last dates. The runner sends `estimated_final`, the final
+price, fee aside, that the gap predicts for the current listed price: `value * (1 - gap)`,
 computed exactly and rounded down to 8 decimals. It is what the calculator's card price field
-asks for. When a series uses the file (`gap_samples`), it
-is checked when the app starts: a row with a naive time, a wrong number of columns, a fee
+asks for. When a series uses the file (`gap_samples`), it is checked when the runner starts: a row with a naive time, a wrong number of columns, a fee
 below 0 or not below the amount, or a final price (fee aside) better than the listed one stops
 it with the line number. The file ships inside the image, so new rows take
 a new deploy.
@@ -105,124 +109,18 @@ a new deploy.
 This started as an Airflow and Spark sandbox. For a handful of values every few minutes on a
 2 GB server, both are the wrong tool: Airflow's scheduler, API server and metadata database
 need more memory than the server has to spare, and Spark has nothing to distribute. Here the
-scheduler is an asyncio task inside the API process, and the whole app runs in about 70 MB.
-What Airflow would give is built in:
+scheduler is one asyncio task per series in a single process. What Airflow would give is built
+in:
 
 - runs are aligned to the clock, and a slot that already has an attempt is skipped;
-- a Postgres advisory lock keeps two processes (say, during a deploy) from running the same
-  series at once;
-- retries are per request, and a failed run is recorded and the next slot runs anyway.
+- a slow run and the next slot never overlap;
+- retries are per request, and a failed run is logged and the next slot runs anyway.
 
-## API
+## Health
 
-`GET /v1/rates/latest`
-
-```json
-{
-  "rates": {
-    "arq_usd_ars": {
-      "value": "1609.79859",
-      "as_of": "2026-09-25T21:04:24.971394Z",
-      "fetched_at": "2026-09-25T21:04:24.919489Z",
-      "source": "arq_usdc_ars_bid",
-      "stale": false,
-      "pending_confirmation": false,
-      "last_attempt_at": "2026-09-25T21:04:24.919489Z",
-      "official_source": false,
-      "indicative": false,
-      "final_price_gap": null,
-      "estimated_final": null
-    }
-  }
-}
-```
-
-- Every configured series is listed. `value` is a decimal string; it and `as_of`,
-  `fetched_at` and `source` are `null` until a first value is accepted, while
-  `last_attempt_at` still shows whether the sources are being asked.
-- `stale`: no value, or `as_of` is older than the series allows (open-market time for the MEP).
-- `pending_confirmation`: a newer reading is held back and may replace this value soon.
-- `official_source: false`: the value comes from an undocumented source.
-- `indicative`: a reference price, not what a trade gets; `final_price_gap` (`percent`,
-  `samples`, `first`, `last`) says how much worse a trade's price was, fee aside, when there
-  are observations, and `estimated_final` is the price that predicts now. Both are `null`
-  for a series without observations.
-
-`GET /v1/rates/{id}/history?from=2026-09-24&to=2026-09-25`
-
-```json
-{
-  "series": "mep",
-  "first": "2026-09-24",
-  "last": "2026-09-25",
-  "days": [
-    {"date": "2026-09-24", "value": "1537.6", "as_of": "2026-09-24T20:00:00Z",
-     "source": "argentinadatos_bolsa_compra_daily"},
-    {"date": "2026-09-25", "value": "1539", "as_of": "2026-09-25T18:00:00Z",
-     "source": "dolarapi_mep_compra"}
-  ]
-}
-```
-
-- One value a day, the one with the latest `as_of` that day (days in Buenos Aires time), only
-  for the days that have one.
-- `from` and `to` are optional: by default, the last 30 days; `first` and `last` repeat the
-  range. At most 400 days per request, between 2000-01-01 and tomorrow. Otherwise a 422 with
-  `detail` `range_too_long`, `from_after_to` or `date_out_of_range` (a date that is not a date
-  gets FastAPI's usual 422). An unknown series is a 404.
-- The MEP's past closes, since 2018, are loaded once from
-  [ArgentinaDatos](https://argentinadatos.com) the first time the app starts: the buy side,
-  as of 17:00, on weekdays, up to yesterday. `source` tells them apart from the values the
-  pipeline read itself.
-
-`GET /health` returns 200 when the app can read its table, and 503 when it cannot. Every
-endpoint answers 503 when the database is down.
-
-The image also has a Docker `HEALTHCHECK` that does not go through HTTP: the process touches
-`/tmp/alive` every 30 seconds, also with `RUN_SCHEDULER=false`, and the check fails when the
-file is missing or older than 2 minutes. `/health` says the database answers; the heartbeat says
-the process is alive. See `docker ps` or
-`docker inspect --format '{{json .State.Health}}' <container>`.
-
-## Running the API
-
-The API needs Postgres. With Docker:
-
-```sh
-docker compose up --build app    # Postgres, migrations, then the app on http://localhost:8000
-```
-
-It runs like the server: migrations as the database owner, the app as a role with only the
-privileges they grant, from a read-only container limited to 256 MB. `APP_PORT` and `DB_PORT`
-change the host ports.
-
-For development, with [uv](https://docs.astral.sh/uv/):
-
-```sh
-uv sync
-docker compose up -d db          # the database, with the owner and app roles
-export MIGRATION_DATABASE_URL=postgresql+psycopg://pipeline:pipeline@localhost:5432/pipeline
-export APP_DB_USER=pipeline_app
-export DATABASE_URL=postgresql+psycopg://pipeline_app:pipeline_app@localhost:5432/pipeline
-uv run alembic upgrade head
-uv run uvicorn --factory data_pipeline.api.main:app --reload
-```
-
-The roles are created when the `db` volume is first created. After pulling a change to them,
-recreate it with `docker compose down -v`.
-
-Settings come from the environment:
-
-| Variable | Default | |
-|---|---|---|
-| `DATABASE_URL` | required | `postgresql+psycopg://…` |
-| `MIGRATION_DATABASE_URL` | `DATABASE_URL` | the database owner, used by Alembic only |
-| `APP_DB_USER` | required by Alembic | the role the migrations grant access to (the one in `DATABASE_URL`) |
-| `RUN_SCHEDULER` | `true` | `false` serves the API without collecting |
-| `CORS_ORIGINS` | none | comma-separated origins allowed to read the API from a browser |
-| `SERIES_FILE` | `config/series.yaml` in a checkout | set in the image |
-| `CUANTO_CUESTA_INGEST_URL` | none | the runner: cuanto-cuesta's `POST /api/ingest`, on the internal network |
-| `CUANTO_CUESTA_INGEST_TOKEN` | none | the runner: its bearer token, cuanto-cuesta's `INGEST_TOKEN`. Without it or the URL, batches are only logged |
+The image has a Docker `HEALTHCHECK` that does not go through HTTP: the process touches
+`/tmp/alive` every 30 seconds, and the check fails when the file is missing or older than 2
+minutes. See `docker ps` or `docker inspect --format '{{json .State.Health}}' <container>`.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the conventions and how to run the checks.
 

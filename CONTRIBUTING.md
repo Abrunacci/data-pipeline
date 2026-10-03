@@ -6,7 +6,7 @@ one should say so in its description.
 ## Before a PR
 
 ```sh
-uv run pytest        # needs Docker: integration tests start a Postgres container
+uv run pytest
 uv run mypy
 uv run ruff check . && uv run ruff format --check .
 ```
@@ -31,14 +31,11 @@ Packages under `src/data_pipeline/`:
   (`python -m data_pipeline.runner`).
 - `destinations/`: one module per app the runner feeds, with the contract that app owns. It
   imports only `core` (a test enforces it).
-- `storage/`: Postgres. The schema and the `Store` implementation.
-- `api/`: FastAPI, and the composition root. Its `lifespan` creates the engine, the HTTP client,
-  the store and the scheduler tasks; there are no module-level instances.
 - `config.py`: settings from the environment and the series from `config/series.yaml`.
 
-Dependencies point inwards: everything may import `core`, `core` imports nothing else, and
-nothing imports `api`. The runner and the destinations never import `api` or `storage`, so the
-image starts without a database.
+Dependencies point inwards: everything may import `core`, and `core` imports nothing else.
+`runner/__main__.py` is the composition root: it creates the HTTP client, the state, the
+destination and the scheduler tasks; there are no module-level instances.
 
 ## Series and sources
 
@@ -46,23 +43,21 @@ image starts without a database.
   it, so an id never changes. The cuanto-cuesta rates use the calculator's ids (`RATE_FIELDS` in
   its `frontend/src/calculator/data/routes.ts`); a new one takes the id the calculator defines,
   never one made up here.
-- A source's `name` is stored with every observation, so renaming one splits its history.
+- A source's `name` is logged with every attempt and sent as the value's `source`, so renaming
+  one changes what the app shows.
 - Series are declared in `config/series.yaml`: sources in order (the first is the primary, the
   rest are fallbacks), an optional control source, interval, opening hours and checks. Numbers
   there are read as exact decimals, and times are quoted.
 - Prefer official, documented endpoints, called with the project's `User-Agent` and well inside
   their published rate limits. A series whose source is undocumented says so with
-  `official_source: false`, which the API publishes. Note the docs, the limit and the terms, or
+  `official_source: false`. Note the docs, the limit and the terms, or
   their absence, in the source's module docstring.
-- A series may name a `history` source: its past values are loaded once, when the app first
-  starts, and stored with status `backfill`. They are part of the daily history and never
-  the current value, an attempt, or a decision. The plausible range is not applied to them.
 - A source never does I/O. When its answer carries no time, the reading is as of `fetched_at`,
   which `parse` receives.
 
 ## Checks
 
-Every attempt is recorded with its outcome; nothing is updated or deleted.
+Every attempt is logged with its outcome.
 
 1. The source refuses a response with the wrong shape (`MalformedResponseError`): HTML, an error
    body, a missing field, a field in another format, a naive timestamp. A well-formed answer
@@ -70,16 +65,15 @@ Every attempt is recorded with its outcome; nothing is updated or deleted.
 2. The value must be one the calculator accepts: positive, at most 1,000,000, at most 8 decimals.
 3. It must be in the series' plausible range, and its timestamp neither older than `max_age` nor
    in the future. For a series with opening hours, only open time counts towards the age.
-4. The control source, if any, is read and recorded (status `control`). If it fails, nothing is
+4. The control source, if any, is read and logged. If it fails, nothing is
    held back.
 5. A value more than `max_jump` away from the last accepted one, or more than `control_within`
-   (1.5 %) away from the control, is a **suspect**: the last accepted value stays published,
-   marked as pending confirmation. It is **confirmed**:
+   (1.5 %) away from the control, is a **suspect**: it is not sent. It is **confirmed**:
    - a jump: at once when the control agrees, or when the two suspects before it jumped the
      same way;
    - a disagreement with the control: when the two suspects before it were also held back
      for disagreeing and are within `max_jump` of it. Each suspect keeps why it was held back
-     (`reason`: `jump` or `disagreement`).
+     (`jump` or `disagreement`).
 
    Suspects older than three intervals expire. A reading back near the last accepted value is
    accepted. These rules are the product owner's; changing them is a product decision.
@@ -88,51 +82,33 @@ A failure in 1–3 tries the next source. A suspect does not: the source did ans
 
 ## Money and time
 
-- `Decimal` everywhere, never floats. JSON is parsed with `parse_float=Decimal`, and the API sends
-  values as decimal strings in plain notation.
-- Values are stored exactly (`NUMERIC` with no scale) and published without trailing zeros.
-- Every timestamp is timezone-aware and stored as `timestamptz`. `as_of` is when the source says
-  the value is from; `fetched_at` is when we read it. Show `as_of` to people.
+- `Decimal` everywhere, never floats. JSON is parsed with `parse_float=Decimal`, and values are
+  sent as decimal strings in plain notation, without trailing zeros.
+- Every timestamp is timezone-aware. `as_of` is when the source says the value is from (sent as
+  `observed_at`); `fetched_at` is when we read it.
 
 ## Types
 
 - Make invalid states unrepresentable: an outcome is `Accepted | Suspect | Rejected`, not a status
-  string with optional fields. The database mirrors that with check constraints.
+  string with optional fields.
 - Branch on a union or an enum with `match`. mypy runs with `exhaustive-match`, so a missed case
   is a type error; do not add a catch-all `case _` to silence it.
 - `mypy --strict` and ruff must pass. A `type: ignore` or `noqa` always names the error code, and
   needs a comment unless the reason is evident.
 
-## Database
+## Health
 
-- Two roles, as on the server: the owner runs the migrations (`MIGRATION_DATABASE_URL`), and the
-  app connects as a role that owns nothing (`DATABASE_URL`). Every migration that creates a
-  table or sequence grants the app role (`APP_DB_USER`) exactly what it needs; today that is
-  `SELECT` and `INSERT`, so the database itself keeps the history append-only.
-- Alembic migrations in `migrations/`, run with `alembic upgrade head`. `storage/tables.py` must
-  match them; an integration test compares the two.
-- Rows of a series are ordered by `id`, the order they were recorded in, never by a timestamp: a
-  clock correction must not reorder the history.
-- `/health` reads the app's own table, so a missing schema or grant fails the deploy's health
-  check and triggers the rollback.
 - The image's `HEALTHCHECK` runs `python -m data_pipeline.runner.heartbeat`, which checks the
-  file the app touches every 30 s. Keep that module standard-library only: it starts on every
+  file the runner touches every 30 s. Keep that module standard-library only: it starts on every
   check, and a slow import is a failed check.
-- A deploy can roll back the code but never a migration, so every migration must work with the
-  code of the release before it: add columns and tables, do not rename or drop in the same
-  release. Migrations run with a 5 s `lock_timeout`, so one that would block the running app
-  fails instead.
-- All pending migrations run in one transaction. To add or change a constraint on a large
-  table, add it `NOT VALID` in one release and `VALIDATE` it in a migration of the next one, so
-  the table is never scanned under an exclusive lock.
+- The runner has no database and serves no HTTP. A deploy is kept only if the container turns
+  healthy.
 
 ## Tests
 
 - New behaviour ships with tests. Cover the edges: bounds, rounding, invalid input, failures.
 - Sources are tested against recorded responses in `tests/sources/fixtures`, never the network.
   Record a fixture with one real call, and say when it was recorded.
-- Integration tests run against a real Postgres in Docker (testcontainers), the same image as
-  the server, with the app connecting as the limited role.
 - Test behaviour, not implementation. A test that would still pass with the code wrong is a bug.
 
 ## Language
