@@ -10,20 +10,17 @@ rates on each visit. So there is nothing to keep in sync and nothing to cut over
 
 The target is a runner with no database and no HTTP of its own:
 
-- It reads and checks each series as it does today, with the same rules (`core/`), and keeps what
-  the checks need (last accepted value, held-back suspects) in memory.
+- It is stateless: it captures each reading, checks it on its own (accepted by the calculator,
+  plausible range, not stale), formats it and delivers it. It keeps nothing between runs, so it
+  does not compare a reading with earlier ones or with a second source (decided 2026-10-03: the
+  jump rule and the control check were removed). Checking a value against what the app already
+  holds is the app's job, in its own backend, which has the history.
 - Each **accepted** reading goes to cuanto-cuesta's ingest API (`Authorization: Bearer`, over
   the server's internal network, not the public proxy), every run, even when the value did not
   change: its `observed_at` keeps the rate fresh in cuanto-cuesta, which otherwise would flag a
   stable value as possibly old. cuanto-cuesta keeps one field per rate, overwritten by each new
   value, with no history.
-- Failed, suspect and control readings go to the runner's log only.
-- It starts empty on every start and reads nothing back from cuanto-cuesta. A restart loses the
-  last accepted values and the suspects being held; that is accepted. Checking a value against
-  what the app already holds is the app's job, in its own backend, not the pipeline's.
-- With no previous value, the first reading of a series has no reference for the jump rule: it
-  still goes through the per-reading checks (accepted by the calculator, plausible range, not
-  stale), and when accepted it is logged as accepted with **no reference**.
+- Rejected readings go to the runner's log only. It reads nothing back from cuanto-cuesta.
 - If cuanto-cuesta does not answer, the value is logged and dropped. No queue: the next run sends
   a newer one.
 - For `binance_card_usd_usdt` it sends the listed `price` and always `estimated_final`, which is

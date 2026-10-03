@@ -1,19 +1,18 @@
 """The checks a reading goes through before it is published.
 
 They run in order: the value itself (``value_problem``), then whether it is plausible and
-fresh (``reading_problem``), and last whether it follows from the values before it and agrees
-with the series' control source (``decide``). A malformed response never gets here: sources
-refuse it when they parse it.
+fresh (``reading_problem``). Each reading is checked on its own: nothing compares it with the
+readings before it, which the runner does not keep. A malformed response never gets here:
+sources refuse it when they parse it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from data_pipeline.core.readings import Accepted, Held, HeldBack, Reading, Rejection, Suspect
+from data_pipeline.core.readings import Reading, Rejection
 
 # The calculator in cuanto-cuesta accepts prices greater than zero, up to 1,000,000, with at most
 # 8 decimals (frontend/src/calculator/inputs.ts). A published value must be one it accepts.
@@ -43,28 +42,14 @@ class Range:
 
 @dataclass(frozen=True, slots=True)
 class Rules:
-    """How a series is checked. ``max_jump`` and ``control_within`` are fractions (0.05 is 5 %).
-
-    A valid reading is held back as a suspect when it moves more than ``max_jump`` from the last
-    accepted value (a jump), or when the series' control source disagrees with it by more than
-    ``control_within``. See ``decide`` for how a suspect gets confirmed.
-    """
+    """How a reading of a series is checked: its plausible range, and how old it may be."""
 
     plausible: Range
     max_age: timedelta
-    max_jump: Decimal
-    control_within: Decimal = Decimal("0.015")
-    confirmations: int = 2
 
     def __post_init__(self) -> None:
         if self.max_age <= timedelta(0):
             raise ValueError(f"max_age must be positive, got {self.max_age}")
-        if not 0 < self.max_jump < 1:
-            raise ValueError(f"max_jump must be between 0 and 1, got {self.max_jump}")
-        if not 0 < self.control_within < 1:
-            raise ValueError(f"control_within must be between 0 and 1, got {self.control_within}")
-        if self.confirmations < 1:
-            raise ValueError(f"confirmations must be at least 1, got {self.confirmations}")
 
 
 def canonical(value: Decimal) -> Decimal:
@@ -129,69 +114,3 @@ def reading_problem(
     if age > rules.max_age:
         return Rejection.STALE, f"as_of {reading.as_of} is {age} old, more than {rules.max_age}"
     return None
-
-
-def decide(
-    reading: Reading,
-    last_accepted: Decimal | None,
-    suspects: Sequence[Held],
-    control: Decimal | None,
-    rules: Rules,
-) -> Accepted | Suspect:
-    """Whether a valid reading is published now or held back as a suspect.
-
-    - ``suspects``: the readings held back since ``last_accepted`` that have not expired, oldest
-      first.
-    - ``control``: the control source's value this run, or None if the series has none or it
-      failed. A control outage never holds a value back.
-
-    A reading is accepted when it is within ``max_jump`` of the last accepted value and the
-    control does not disagree. Otherwise it is a suspect, and it confirms itself:
-
-    - a jump, at once, when the control agrees with it;
-    - a jump, when the ``confirmations`` suspects just before it jumped the same way: the market
-      moved, even if it keeps moving;
-    - a disagreement with the control, when the ``confirmations`` suspects just before it were
-      also held back for disagreeing and are within ``max_jump`` of it: the value persists,
-      whatever the control says. Jumps do not count here: they say nothing about the control.
-    """
-    value = reading.value
-    if last_accepted is None:
-        return Accepted(reading)
-    jump = not _within(value, last_accepted, rules.max_jump)
-    agrees = control is not None and _within(value, control, rules.control_within)
-    if not jump and (control is None or agrees):
-        return Accepted(reading)
-    if jump and agrees:
-        return Accepted(reading, confirmed=True, detail=f"the control source agrees ({control})")
-
-    if jump:
-        up = value > last_accepted
-
-        def in_run(suspect: Held) -> bool:
-            beyond = not _within(suspect.value, last_accepted, rules.max_jump)
-            return beyond and (suspect.value > last_accepted) == up
-
-        held = Suspect(reading, HeldBack.JUMP, f"jumped from {last_accepted}")
-        how = "the market kept moving the same way"
-    else:
-
-        def in_run(suspect: Held) -> bool:
-            disagreed = suspect.why is HeldBack.DISAGREEMENT
-            return disagreed and _within(suspect.value, value, rules.max_jump)
-
-        held = Suspect(reading, HeldBack.DISAGREEMENT, f"the control source says {control}")
-        how = "the value persisted"
-
-    run = 0
-    for suspect in reversed(suspects):
-        if not in_run(suspect):
-            break
-        run += 1
-    if run >= rules.confirmations:
-        return Accepted(reading, confirmed=True, detail=f"{how} for {run + 1} readings")
-    return held
-
-
-def _within(value: Decimal, reference: Decimal, fraction: Decimal) -> bool:
-    return abs(value - reference) <= reference * fraction

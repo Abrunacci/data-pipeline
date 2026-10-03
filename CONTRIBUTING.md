@@ -20,22 +20,22 @@ always runs them.
 
 Packages under `src/data_pipeline/`:
 
-- `core/`: the pipeline's rules. Readings and their outcomes, the checks, the rule that holds back
-  and confirms jumps, what a series and a source are. Standard library only (an import test
+- `core/`: the pipeline's rules. Readings and their outcomes, the checks, what a series and a
+  source are. Standard library only (an import test
   enforces it) and no I/O.
 - `sources/`: one adapter per source. A source builds its request and parses the response; it
   never does I/O itself, so every source is tested against recorded responses.
 - `runner/`: sends requests (timeout and retries live here only), runs a series through its
-  sources, and schedules runs. It defines the `SeriesStore` and `Destination` protocols it needs,
-  keeps the state in memory (`memory.py`), and is the entry point of the image
+  sources, logs every attempt (`log.py`), and schedules runs. It defines the `Destination`
+  protocol it needs, keeps no state, and is the entry point of the image
   (`python -m data_pipeline.runner`).
 - `destinations/`: one module per app the runner feeds, with the contract that app owns. It
   imports only `core` (a test enforces it).
 - `config.py`: settings from the environment and the series from `config/series.yaml`.
 
 Dependencies point inwards: everything may import `core`, and `core` imports nothing else.
-`runner/__main__.py` is the composition root: it creates the HTTP client, the state, the
-destination and the scheduler tasks; there are no module-level instances.
+`runner/__main__.py` is the composition root: it creates the HTTP client, the destination
+and the scheduler tasks; there are no module-level instances.
 
 ## Series and sources
 
@@ -65,20 +65,11 @@ Every attempt is logged with its outcome.
 2. The value must be one the calculator accepts: positive, at most 1,000,000, at most 8 decimals.
 3. It must be in the series' plausible range, and its timestamp neither older than `max_age` nor
    in the future. For a series with opening hours, only open time counts towards the age.
-4. The control source, if any, is read and logged. If it fails, nothing is
-   held back.
-5. A value more than `max_jump` away from the last accepted one, or more than `control_within`
-   (1.5 %) away from the control, is a **suspect**: it is not sent. It is **confirmed**:
-   - a jump: at once when the control agrees, or when the two suspects before it jumped the
-     same way;
-   - a disagreement with the control: when the two suspects before it were also held back
-     for disagreeing and are within `max_jump` of it. Each suspect keeps why it was held back
-     (`jump` or `disagreement`).
+A failure tries the next source; the first reading that passes is accepted and sent.
 
-   Suspects older than three intervals expire. A reading back near the last accepted value is
-   accepted. These rules are the product owner's; changing them is a product decision.
-
-A failure in 1–3 tries the next source. A suspect does not: the source did answer.
+The runner is stateless: it keeps nothing between runs, so no check may depend on an earlier
+reading or on a second source. Comparing a value with the ones before it belongs to the app that
+stores them. These rules are the product owner's; changing them is a product decision.
 
 ## Money and time
 
@@ -89,7 +80,7 @@ A failure in 1–3 tries the next source. A suspect does not: the source did ans
 
 ## Types
 
-- Make invalid states unrepresentable: an outcome is `Accepted | Suspect | Rejected`, not a status
+- Make invalid states unrepresentable: an outcome is `Accepted | Rejected`, not a status
   string with optional fields.
 - Branch on a union or an enum with `match`. mypy runs with `exhaustive-match`, so a missed case
   is a type error; do not add a catch-all `case _` to silence it.

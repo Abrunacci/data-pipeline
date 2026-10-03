@@ -11,9 +11,6 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-# The calculator's users' zone: the MEP's hours and Argentine sources' times.
-BUENOS_AIRES = ZoneInfo("America/Argentina/Buenos_Aires")
-
 
 @dataclass(frozen=True, slots=True)
 class OpeningHours:
