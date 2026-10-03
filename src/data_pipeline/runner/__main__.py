@@ -1,6 +1,6 @@
-"""The runner: ``python -m data_pipeline.runner``. It runs every series on its schedule, keeps
-what the checks need in memory, and hands each accepted value to cuanto-cuesta's destination. It
-has no database and serves no HTTP; Docker's ``HEALTHCHECK`` reads its heartbeat.
+"""The runner: ``python -m data_pipeline.runner``. It runs every series on its schedule and hands
+each accepted value to cuanto-cuesta's destination. It keeps no state: no database, nothing in
+memory between runs, and no HTTP of its own; Docker's ``HEALTHCHECK`` reads its heartbeat.
 
 The destination posts to cuanto-cuesta when ``CUANTO_CUESTA_INGEST_URL`` and
 ``CUANTO_CUESTA_INGEST_TOKEN`` are both set, and only logs each batch otherwise; the start says
@@ -27,7 +27,6 @@ from data_pipeline.destinations.cuanto_cuesta import CuantoCuestaIngest, CuantoC
 from data_pipeline.runner.destination import Destination
 from data_pipeline.runner.fetch import CLIENT_TIMEOUT
 from data_pipeline.runner.heartbeat import beat_forever
-from data_pipeline.runner.memory import MemoryState
 from data_pipeline.runner.scheduler import run_forever
 from data_pipeline.sources import available_sources
 
@@ -79,13 +78,12 @@ async def run(settings: RunnerSettings) -> None:
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(signum, stop.set)
-    state = MemoryState()
     async with http_client(settings) as client:
         series, sources, destination = configure(settings, client)
         tasks = [asyncio.create_task(beat_forever(), name="heartbeat")]
         tasks += [
             asyncio.create_task(
-                run_forever(s, sources, client, state, destination=destination),
+                run_forever(s, sources, client, destination=destination),
                 name=f"series:{s.id}",
             )
             for s in series

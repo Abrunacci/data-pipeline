@@ -1,8 +1,8 @@
 """Running every series on its interval.
 
-Runs are aligned to the clock (every 10 minutes means :00, :10, :20…). ``SeriesStore.exclusive``
-stops a slow run and the next slot from overlapping, and a slot that already has an attempt is
-skipped, so a slot runs once.
+Runs are aligned to the clock (every 10 minutes means :00, :10, :20…). Each series runs in its
+own loop, one run after the other, so a slow run never overlaps the next slot; the loop waits for
+the start of the slot after the one the run ended in.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from data_pipeline.core.series import Series
 from data_pipeline.core.sources import Source
 from data_pipeline.runner.collect import Clock, collect
 from data_pipeline.runner.destination import Destination
-from data_pipeline.runner.store import SeriesStore
 
 logger = logging.getLogger(__name__)
 
@@ -35,25 +34,18 @@ async def run_slot(
     series: Series,
     sources: Mapping[str, Source],
     client: httpx.AsyncClient,
-    store: SeriesStore,
     now: Clock,
     destination: Destination | None = None,
 ) -> bool:
-    """Run ``series`` for the current slot unless another process is on it or already did it,
-    and send its reading to ``destination`` if it was accepted. A destination that fails is
-    logged, and the value dropped.
+    """Run ``series`` unless its current slot is outside its hours, and send its reading to
+    ``destination`` if one was accepted. A destination that fails is logged, and the value
+    dropped.
 
     Returns whether it ran.
     """
-    async with store.exclusive(series.id) as alone:
-        if not alone:
-            return False
-        start = slot_start(now(), series.every)
-        if not series.runs_at(start):
-            return False
-        if await store.attempted_in(series.id, start, start + series.every):
-            return False
-        observations = await collect(series, sources, client, store, now)
+    if not series.runs_at(slot_start(now(), series.every)):
+        return False
+    observations = await collect(series, sources, client, now)
     if destination is not None:
         for observation in observations:
             if isinstance(observation.outcome, Accepted):
@@ -68,20 +60,18 @@ async def run_forever(
     series: Series,
     sources: Mapping[str, Source],
     client: httpx.AsyncClient,
-    store: SeriesStore,
     now: Clock = lambda: datetime.now(UTC),
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     destination: Destination | None = None,
 ) -> None:
-    """Run ``series`` now if its current slot has not run, then at the start of every slot.
+    """Run ``series`` now, then at the start of every slot.
 
-    An error in one run is logged and the next slot runs anyway. A run that starts at the very
-    end of a slot and ends in the next one counts as that next slot's run, so that slot is
-    skipped; it only happens at startup.
+    An error in one run is logged and the next slot runs anyway. A run that ends in the next slot
+    counts as that slot's run, so that slot is skipped.
     """
     while True:
         try:
-            await run_slot(series, sources, client, store, now, destination)
+            await run_slot(series, sources, client, now, destination)
         except Exception:
             logger.exception("run of %s failed", series.id)
         next_slot = slot_start(now(), series.every) + series.every

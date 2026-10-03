@@ -11,7 +11,7 @@ import pytest
 
 from data_pipeline.config import DEFAULT_SERIES_FILE, load_series
 from data_pipeline.core.gap import Gap
-from data_pipeline.core.readings import Accepted, Control, Observation, Reading
+from data_pipeline.core.readings import Accepted, Observation, Reading, Rejected, Rejection
 from data_pipeline.core.sources import Request
 from data_pipeline.destinations.cuanto_cuesta import RATES, CuantoCuestaLog, batch, rate_item
 from data_pipeline.sources import available_sources
@@ -124,9 +124,9 @@ def test_a_series_cuanto_cuesta_does_not_take_fails_at_startup() -> None:
 
 
 def test_only_accepted_readings_are_sent() -> None:
-    control = Observation("mep", "ambito_mep", AS_OF, Control(Reading(Decimal(1), AS_OF)))
+    failed = Observation("mep", "dolarapi_mep_compra", AS_OF, Rejected(Rejection.STALE, "old"))
     with pytest.raises(ValueError, match="only accepted"):
-        destination().payload(SERIES["mep"], control)
+        destination().payload(SERIES["mep"], failed)
 
 
 def test_a_batch_holds_1_to_20_items() -> None:

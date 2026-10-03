@@ -1,4 +1,4 @@
-"""What a source reports, and what the pipeline decided about it."""
+"""What a source reports, and whether it passed the checks."""
 
 from __future__ import annotations
 
@@ -42,43 +42,7 @@ class Rejection(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Accepted:
-    """A reading that is published. ``confirmed`` is True when it was a suspect that confirmed
-    itself, and ``detail`` says how."""
-
-    reading: Reading
-    confirmed: bool = False
-    detail: str | None = None
-
-
-class HeldBack(StrEnum):
-    """Why a reading was held back."""
-
-    JUMP = "jump"
-    DISAGREEMENT = "disagreement"
-
-
-@dataclass(frozen=True, slots=True)
-class Suspect:
-    """A valid reading held back until it is confirmed: ``why``, and ``detail`` in words."""
-
-    reading: Reading
-    why: HeldBack
-    detail: str
-
-
-@dataclass(frozen=True, slots=True)
-class Held:
-    """A suspect as the next decisions see it. ``why`` is None for one recorded before the
-    reason was kept: it counts as neither."""
-
-    value: Decimal
-    why: HeldBack | None
-
-
-@dataclass(frozen=True, slots=True)
-class Control:
-    """A valid reading from a series' control source. It is never published: it only tells
-    whether the source's reading can be trusted."""
+    """A reading that passed every check and is sent."""
 
     reading: Reading
 
@@ -92,7 +56,7 @@ class Rejected:
     reading: Reading | None = None
 
 
-type Outcome = Accepted | Suspect | Control | Rejected
+type Outcome = Accepted | Rejected
 
 
 @dataclass(frozen=True, slots=True)

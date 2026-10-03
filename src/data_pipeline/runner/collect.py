@@ -1,5 +1,4 @@
-"""One run of a series: ask its sources in order, check the answer against the control source
-and the values before it, and record every attempt."""
+"""One run of a series: ask its sources in order and log every attempt."""
 
 from __future__ import annotations
 
@@ -9,12 +8,12 @@ from datetime import datetime
 
 import httpx
 
-from data_pipeline.core.checks import canonical, decide, reading_problem
-from data_pipeline.core.readings import Control, Observation, Reading, Rejected, Rejection
+from data_pipeline.core.checks import canonical, reading_problem
+from data_pipeline.core.readings import Accepted, Observation, Reading, Rejected, Rejection
 from data_pipeline.core.series import Series
 from data_pipeline.core.sources import MalformedResponseError, NoQuoteError, Source
 from data_pipeline.runner.fetch import FetchError, fetch
-from data_pipeline.runner.store import SeriesStore
+from data_pipeline.runner.log import log_attempt
 
 logger = logging.getLogger(__name__)
 
@@ -25,45 +24,22 @@ async def collect(
     series: Series,
     sources: Mapping[str, Source],
     client: httpx.AsyncClient,
-    store: SeriesStore,
     now: Clock,
 ) -> list[Observation]:
-    """Try the sources of ``series`` in order and stop at the first valid reading, then read
-    the control source and decide whether the reading is published or held back.
+    """Try the sources of ``series`` in order and stop at the first valid reading, which is
+    accepted. Every attempt is logged, the failed ones with why they failed.
 
-    Every attempt is recorded, including the failed ones and why they failed, and the control
-    reading before the decision it informs. A suspect does not try the fallbacks: the source
-    did answer.
+    A reading is checked on its own (``core.checks``); nothing compares it with the ones before.
     """
     observations: list[Observation] = []
-
-    async def record(observation: Observation) -> None:
-        await store.record(observation)
-        observations.append(observation)
-
     for name in series.sources:
         fetched_at, result = await _read(series, sources[name], client, now)
-        if isinstance(result, Rejected):
-            await record(Observation(series.id, name, fetched_at, result))
-            continue
-
-        control: Reading | None = None
-        if series.control is not None and series.control != name:
-            control_at, checked = await _read(series, sources[series.control], client, now)
-            outcome = checked if isinstance(checked, Rejected) else Control(checked)
-            await record(Observation(series.id, series.control, control_at, outcome))
-            control = None if isinstance(checked, Rejected) else checked
-
-        state = await store.state(series.id, since=fetched_at - series.suspects_expire_after)
-        decision = decide(
-            result,
-            state.last_accepted,
-            state.suspects,
-            None if control is None else control.value,
-            series.rules,
-        )
-        await record(Observation(series.id, name, fetched_at, decision))
-        break
+        outcome = result if isinstance(result, Rejected) else Accepted(result)
+        observation = Observation(series.id, name, fetched_at, outcome)
+        log_attempt(observation)
+        observations.append(observation)
+        if isinstance(outcome, Accepted):
+            break
     return observations
 
 
@@ -74,10 +50,9 @@ async def _read(
     fetch gave up.
 
     A bug in the source's own code, building its request or parsing an answer it did not
-    foresee, is logged with its traceback and recorded as ``source_bug``: the run goes on, so a
-    broken control never stops the reading it checks from being decided and recorded. Anything
-    else fetch raises (a closed client) is a bug of the runner: it aborts this series' run,
-    which the scheduler logs before the next slot.
+    foresee, is logged with its traceback and rejected as ``source_bug``: the run goes on to the
+    next source. Anything else fetch raises (a closed client) is a bug of the runner: it aborts
+    this series' run, which the scheduler logs before the next slot.
     """
     try:
         request = source.request()
@@ -102,7 +77,7 @@ async def _read(
     if (problem := reading_problem(reading, series.rules, fetched_at, age)) is not None:
         reason, detail = problem
         return fetched_at, Rejected(reason, detail, reading)
-    # Stored and published without trailing zeros: Bitso sends 1615.300000000000.
+    # Sent without trailing zeros: Bitso sends 1615.300000000000.
     return fetched_at, Reading(canonical(reading.value), reading.as_of)
 
 

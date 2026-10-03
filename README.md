@@ -5,8 +5,11 @@ uses it. Today it collects the exchange rates the
 [cuanto-cuesta](https://cuanto-cuesta.abrunacci.dev) calculator needs, and it is meant to take
 other datasets later.
 
-It has no database and serves no HTTP: it logs every attempt, and the app it feeds stores the
-values. It runs in one container, whose Docker `HEALTHCHECK` says whether it is alive.
+It keeps no state: no database, nothing in memory from one run to the next, and no HTTP of its
+own. It captures each value, checks it on its own, formats it and delivers it; the app it feeds
+stores the values, and comparing a value with earlier ones is that app's job, since it has the
+history. The runner logs every attempt. It runs in one container, whose Docker `HEALTHCHECK` says
+whether it is alive.
 
 ## The runner
 
@@ -29,31 +32,29 @@ from the environment, and none is required:
 One line per attempt, and one per item cuanto-cuesta answers for, for example:
 
 ```
-INFO data_pipeline.runner.memory: bitso_usdt_ars bitso_usdt_ars_bid accepted 1615.3 (checked)
+INFO data_pipeline.runner.log: bitso_usdt_ars bitso_usdt_ars_bid accepted 1615.3
 INFO data_pipeline.destinations.cuanto_cuesta: cuanto-cuesta batch 90a44048-… (bitso_usdt_ars): bitso_usdt_ars stored
 ```
 
-- It starts with no state, so the first accepted value of each series after a start has nothing
-  to check a jump against: it still passes the per-reading checks (plausible range, not stale),
-  and its line says `no reference`.
-- Held-back, control and rejected readings are logged, never sent.
+- Every accepted reading is sent, even when the value did not change, so its `observed_at`
+  keeps the rate fresh in the app. Rejected readings are logged, never sent.
 - `binance_card_usd_usdt` always carries `estimated_final`, `null` when there is no estimate or
   cuanto-cuesta would refuse it; no other rate carries it.
 
 ## What it collects
 
-| Series | Value | Source → control | Every |
+| Series | Value | Sources | Every |
 |---|---|---|---|
-| `mep` | ARS paid for each USD sold through the MEP (buy side) | [DolarApi](https://dolarapi.com/docs/argentina/operations/get-dolar-bolsa.html) → Ámbito | 15 min, weekdays 10:45–17:30 Buenos Aires |
+| `mep` | ARS paid for each USD sold through the MEP (buy side) | [DolarApi](https://dolarapi.com/docs/argentina/operations/get-dolar-bolsa.html) | 15 min, weekdays 10:45–17:30 Buenos Aires |
 | `binance_p2p_usdt_usd` | USD paid for each USDT on Binance P2P: median of the 5 cheapest merchant ads that take 500 USD, from merchants with 95 % of orders completed | [Binance P2P public API](https://www.binance.com/en/skills/detail/binance/p2p) | 10 min |
-| `bitso_usdt_ars` | ARS paid for each USDT sold on Bitso (best bid) | [Bitso public API](https://docs.bitso.com/bitso-api/docs/ticker) → CriptoYa | 10 min |
+| `bitso_usdt_ars` | ARS paid for each USDT sold on Bitso (best bid) | [Bitso public API](https://docs.bitso.com/bitso-api/docs/ticker) | 10 min |
 | `binance_card_usd_usdt` | USDT Binance lists for each USD paid with a card: **indicative**, sent with `estimated_final` | [Binance fiat public API](https://www.binance.com/en/skills/detail/binance/fiat) | 10 min |
-| `arq_usd_ars` | ARS ARQ pays for each USDc, at par with USD (its bid) | ARQ's ticker (undocumented, so `official_source: false`), CriptoYa as fallback → CriptoYa | 10 min |
+| `arq_usd_ars` | ARS ARQ pays for each USDc, at par with USD (its bid) | ARQ's ticker (undocumented, so `official_source: false`), CriptoYa as fallback | 10 min |
 
 The series ids are the ones the calculator uses. For the card price, see
 [Card price gap](#card-price-gap).
 
-## How a value gets published
+## How a value gets sent
 
 1. **Fetch** from the series' first source, with a 10 s timeout and two retries on network
    errors and 5xx. If the source fails, the next one in the list is tried.
@@ -61,18 +62,10 @@ The series ids are the ones the calculator uses. For the card price, see
    format is rejected.
 3. **Check** the value: one the calculator accepts, in a plausible range, and not stale. A
    market's value only ages while it is open: Friday's closing MEP is not stale on Saturday.
-4. **Cross-check** it with the series' control source, a second source read every run and
-   never published.
-5. **Hold back** a value that jumped more than the series allows (5 %, 2 % for P2P) from the
-   last published one, or that the control disagrees with by more than 1.5 %. Nothing is sent
-   until the value confirms itself:
-   - a jump, at once if the control agrees, or when the next two readings jumped the same
-     way (the market moved, even if it keeps moving);
-   - a disagreement, when the next two readings also disagree with the control and stay
-     within the series' jump limit of it (the value persists).
+4. **Send** the first value that passes to the app, in the shape its API takes.
 
-   A real move shows within two more runs; a one-off glitch never does. Held-back values
-   expire after three intervals, so an old one cannot confirm a new jump after an outage.
+Nothing is compared with earlier readings or with a second source: a value that passes its own
+checks is sent.
 
 Every attempt is logged with its outcome and reason, failures included.
 
@@ -99,10 +92,10 @@ The published gap is the median over every row of the price gap, fee aside:
 rows there are and their first and last dates. The runner sends `estimated_final`, the final
 price, fee aside, that the gap predicts for the current listed price: `value * (1 - gap)`,
 computed exactly and rounded down to 8 decimals. It is what the calculator's card price field
-asks for. When a series uses the file (`gap_samples`), it is checked when the runner starts: a row with a naive time, a wrong number of columns, a fee
-below 0 or not below the amount, or a final price (fee aside) better than the listed one stops
-it with the line number. The file ships inside the image, so new rows take
-a new deploy.
+asks for. When a series uses the file (`gap_samples`), it is checked when the runner starts:
+a row with a naive time, a wrong number of columns, a fee below 0 or not below the amount, or a
+final price (fee aside) better than the listed one stops it with the line number. The file ships
+inside the image, so new rows take a new deploy.
 
 ## Why not Airflow
 
@@ -112,8 +105,8 @@ need more memory than the server has to spare, and Spark has nothing to distribu
 scheduler is one asyncio task per series in a single process. What Airflow would give is built
 in:
 
-- runs are aligned to the clock, and a slot that already has an attempt is skipped;
-- a slow run and the next slot never overlap;
+- runs are aligned to the clock;
+- a slow run and the next slot never overlap: each series runs in its own loop;
 - retries are per request, and a failed run is logged and the next slot runs anyway.
 
 ## Health

@@ -14,7 +14,6 @@ from data_pipeline.core.checks import value_problem
 from data_pipeline.core.readings import Rejection
 from data_pipeline.core.sources import MalformedResponseError, NoQuoteError
 from data_pipeline.sources import available_sources
-from data_pipeline.sources.ambito import AmbitoMep
 from data_pipeline.sources.arq import ArqBid
 from data_pipeline.sources.binance_card import BinanceCardPrice
 from data_pipeline.sources.binance_p2p import BinanceP2PMedian
@@ -38,8 +37,16 @@ def edited(name: str, change: dict[str, object], at: list[str | int] = []) -> by
     return json.dumps(data).encode()
 
 
-def test_every_source_has_a_unique_name() -> None:
-    assert len(available_sources()) == 8
+def test_every_source_a_series_uses_is_available_and_nothing_else() -> None:
+    # The control sources (Ámbito, CriptoYa for Bitso) are gone with the control check.
+    assert sorted(available_sources()) == [
+        "arq_usdc_ars_bid",
+        "binance_card_usd_usdt_list",
+        "binance_p2p_usdt_usd_buy_median",
+        "bitso_usdt_ars_bid",
+        "criptoya_arq_usdc_ars_bid",
+        "dolarapi_mep_compra",
+    ]
 
 
 class TestDolarApi:
@@ -62,34 +69,6 @@ class TestDolarApi:
     def test_a_changed_format_is_malformed(self, change: dict[str, object]) -> None:
         with pytest.raises(MalformedResponseError):
             self.source.parse(edited("dolarapi_bolsa.json", change), FETCHED_AT)
-
-
-class TestAmbito:
-    source = AmbitoMep()
-
-    def test_reads_the_comma_decimal_and_the_local_time(self) -> None:
-        # Recorded: compra "1550,60", fecha "25/09/2026 - 15:00" (Buenos Aires, UTC-3).
-        reading = self.source.parse(fixture("ambito_mep_variacion.json"), FETCHED_AT)
-        assert reading.value == Decimal("1550.60")
-        assert reading.as_of == datetime(2026, 9, 25, 18, 0, tzinfo=UTC)
-
-    def test_reads_thousands_separators(self) -> None:
-        body = edited("ambito_mep_variacion.json", {"compra": "1.550,60"})
-        assert self.source.parse(body, FETCHED_AT).value == Decimal("1550.60")
-
-    @pytest.mark.parametrize(
-        "change",
-        [
-            {"compra": "1550.60"},
-            {"compra": "1,550.60"},
-            {"compra": "-1550,60"},
-            {"fecha": "2026-09-25 15:00"},
-            {"compra": 1550.6},
-        ],
-    )
-    def test_a_changed_format_is_malformed(self, change: dict[str, object]) -> None:
-        with pytest.raises(MalformedResponseError):
-            self.source.parse(edited("ambito_mep_variacion.json", change), FETCHED_AT)
 
 
 class TestBinanceP2P:

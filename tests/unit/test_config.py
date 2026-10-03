@@ -25,8 +25,6 @@ series:
     every_minutes: 10
     plausible: {min: 500, max: 50000}
     max_age_minutes: 30
-    max_jump_percent: 5
-    control_within_percent: 0.1
 """
 
 
@@ -46,13 +44,11 @@ def test_the_repo_series_file_loads() -> None:
         "binance_card_usd_usdt",
     ]
     mep = series["mep"]
-    assert mep.control == "ambito_mep"
     assert mep.hours is not None
     # Friday 17:30 and Saturday noon, Buenos Aires.
     assert mep.runs_at(datetime(2026, 9, 25, 20, 30, tzinfo=UTC))
     assert not mep.runs_at(datetime(2026, 9, 26, 15, 0, tzinfo=UTC))
-    assert series["bitso_usdt_ars"].rules.max_jump == Decimal("0.05")
-    assert series["bitso_usdt_ars"].rules.control_within == Decimal("0.015")
+    assert series["bitso_usdt_ars"].sources == ("bitso_usdt_ars_bid",)
     assert series["binance_p2p_usdt_usd"].every == timedelta(minutes=10)
     assert not series["arq_usd_ars"].official_source
     assert all(s.official_source for s in series.values() if s.id != "arq_usd_ars")
@@ -64,9 +60,9 @@ def test_the_repo_series_file_loads() -> None:
 
 
 def test_decimals_are_read_from_their_text(tmp_path: Path) -> None:
-    (series,) = load(tmp_path, VALID)
-    # 0.1 as a float would be 0.1000000000000000055…; divided by 100 it must be exact.
-    assert series.rules.control_within == Decimal("0.001")
+    (series,) = load(tmp_path, VALID.replace("{min: 500,", "{min: 0.1,"))
+    # 0.1 as a float would be 0.1000000000000000055…
+    assert series.rules.plausible.min == Decimal("0.1")
 
 
 HOURS = """
@@ -102,13 +98,11 @@ def test_opening_hours_mistakes_are_config_errors(
         load(tmp_path, VALID + HOURS.replace(*change))
 
 
-def test_a_control_must_be_a_known_source_other_than_the_primary(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match=r"unknown sources \['nope'\]"):
-        load(tmp_path, VALID + "\n    control: nope")
-    with pytest.raises(ConfigError, match="its own control"):
-        load(tmp_path, VALID + "\n    control: bitso_usdt_ars_bid")
-    (series,) = load(tmp_path, VALID + "\n    control: criptoya_bitso_usdt_ars_bid")
-    assert series.control == "criptoya_bitso_usdt_ars_bid"
+@pytest.mark.parametrize("key", ["control: criptoya_arq_usdc_ars_bid", "max_jump_percent: 5"])
+def test_the_checks_against_other_readings_are_gone(tmp_path: Path, key: str) -> None:
+    # The runner keeps no state and reads no control: a file that still sets them is refused.
+    with pytest.raises(ConfigError, match="Extra inputs are not permitted"):
+        load(tmp_path, VALID + "\n    " + key)
 
 
 CARD = """
@@ -119,7 +113,6 @@ series:
     every_minutes: 10
     plausible: {min: 0.5, max: 2}
     max_age_minutes: 30
-    max_jump_percent: 2
     indicative: true
     gap_samples: samples.csv
 """
@@ -193,8 +186,7 @@ def test_only_an_indicative_series_has_a_gap(tmp_path: Path) -> None:
         (("every_minutes: 10", "every_minutes: 10\n    extra: 1"), "extra"),
         (("every_minutes: 10", "every_minutes: true"), "every_minutes"),
         (("every_minutes: 10", "every_minutes: 10\n    every_minutes: 5"), "repeated keys"),
-        (("max_jump_percent: 5", "max_jump_percent: .inf"), "not a decimal: .inf"),
-        (("max_jump_percent: 5", "max_jump_percent: 100"), "max_jump must be between"),
+        (("max: 50000}", "max: .inf}"), "not a decimal: .inf"),
         (("id: bitso_usdt_ars", "id: Bitso-USDT"), "id"),
         (("{min: 500, max: 50000}", "{min: 50000, max: 500}"), "min < max"),
         (("max_age_minutes: 30", "max_age_minutes: 5"), "shorter than every"),

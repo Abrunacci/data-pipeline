@@ -99,13 +99,10 @@ class _Series(_Strict):
     id: Annotated[str, StringConstraints(pattern=r"^[a-z0-9]+(_[a-z0-9]+)*$")]
     description: Annotated[str, StringConstraints(min_length=1)]
     sources: tuple[str, ...]
-    control: str | None = None
     every_minutes: Annotated[int, Field(gt=0, strict=True)]
     hours: _Hours | None = None
     plausible: _Range
     max_age_minutes: Annotated[int, Field(gt=0, strict=True)]
-    max_jump_percent: _Positive
-    control_within_percent: _Positive = Decimal("1.5")
     official_source: Annotated[bool, Field(strict=True)] = True
     indicative: Annotated[bool, Field(strict=True)] = False
     # CSV of observed list/final pairs (see data/binance_card_quotes.csv), relative to the
@@ -132,18 +129,15 @@ def load_series(path: Path, sources: Mapping[str, Source]) -> tuple[Series, ...]
 
 
 def _build(entry: _Series, sources: Mapping[str, Source], directory: Path) -> Series:
-    named = [*entry.sources, *([] if entry.control is None else [entry.control])]
-    if unknown := [name for name in named if name not in sources]:
+    if unknown := [name for name in entry.sources if name not in sources]:
         raise ValueError(f"series {entry.id}: unknown sources {unknown}")
     if entry.gap_samples is not None and not entry.indicative:
         raise ValueError(f"series {entry.id}: gap_samples is only for an indicative series")
-    hundred = Decimal(100)
     hours = entry.hours
     return Series(
         id=entry.id,
         description=entry.description,
         sources=tuple(entry.sources),
-        control=entry.control,
         every=timedelta(minutes=entry.every_minutes),
         hours=None
         if hours is None
@@ -151,8 +145,6 @@ def _build(entry: _Series, sources: Mapping[str, Source], directory: Path) -> Se
         rules=Rules(
             plausible=Range(entry.plausible.min, entry.plausible.max),
             max_age=timedelta(minutes=entry.max_age_minutes),
-            max_jump=entry.max_jump_percent / hundred,
-            control_within=entry.control_within_percent / hundred,
         ),
         official_source=entry.official_source,
         indicative=entry.indicative,
