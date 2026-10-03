@@ -29,7 +29,7 @@ from data_pipeline.runner.fetch import CLIENT_TIMEOUT
 from data_pipeline.runner.heartbeat import beat_forever
 from data_pipeline.runner.memory import MemoryState
 from data_pipeline.runner.scheduler import run_forever
-from data_pipeline.sources import available_history_sources, available_sources
+from data_pipeline.sources import available_sources
 
 logger = logging.getLogger("data_pipeline.runner")
 
@@ -38,9 +38,7 @@ def configure(
     settings: RunnerSettings, client: httpx.AsyncClient
 ) -> tuple[tuple[Series, ...], Mapping[str, Source], Destination]:
     sources = available_sources()
-    # The history sources only load past values for the API; the runner keeps no history, but
-    # the series file still names them.
-    series = load_series(settings.series_file, sources, available_history_sources())
+    series = load_series(settings.series_file, sources)
     return series, sources, pick_destination(settings, series, sources, client)
 
 

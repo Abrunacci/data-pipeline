@@ -16,12 +16,12 @@ import pytest
 from data_pipeline.config import DEFAULT_SERIES_FILE, load_series
 from data_pipeline.core.readings import Accepted, Observation, Reading
 from data_pipeline.destinations.cuanto_cuesta import CuantoCuestaIngest
-from data_pipeline.sources import available_history_sources, available_sources
+from data_pipeline.sources import available_sources
 
 pytestmark = pytest.mark.anyio
 
 SOURCES = available_sources()
-SERIES = {s.id: s for s in load_series(DEFAULT_SERIES_FILE, SOURCES, available_history_sources())}
+SERIES = {s.id: s for s in load_series(DEFAULT_SERIES_FILE, SOURCES)}
 ID = UUID("0b8e6a3c-5d1f-4c1e-9a77-2f0c8f3e1b20")
 URL = "http://cuanto-cuesta-backend:8000/api/ingest"
 TOKEN = "not-a-real-token"

@@ -10,7 +10,6 @@ COPY README.md ./
 COPY src ./src
 COPY config ./config
 COPY data ./data
-COPY migrations ./migrations
 RUN uv sync --locked --no-dev --no-editable
 
 FROM ${PYTHON_IMAGE}
@@ -20,15 +19,12 @@ WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 COPY --from=build /app/config /app/config
 COPY --from=build /app/data /app/data
-COPY alembic.ini /app/alembic.ini
-COPY --from=build /app/migrations /app/migrations
 # SERIES_FILE is required here: the installed package cannot find config/ relative to itself.
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     SERIES_FILE=/app/config/series.yaml
 USER app
-EXPOSE 8000
 # The process touches /tmp/alive every 30 s; the check fails when it is missing or older than
 # 2 minutes (src/data_pipeline/runner/heartbeat.py). It needs a writable /tmp, a tmpfs on the server.
 # - interval 30s: one check per beat; with retries 3, a hung process is unhealthy within about
@@ -42,6 +38,5 @@ EXPOSE 8000
 # - retries 3: one slow check under load does not flip it; three in a row do.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s --retries=3 \
     CMD ["python", "-m", "data_pipeline.runner.heartbeat"]
-# The runner: no database and no HTTP of its own (docs/plan.md, step 1). The API still runs from
-# this image with an explicit command, as compose.yml does, until step 3 removes it.
+# The runner: no database and no HTTP of its own.
 CMD ["python", "-m", "data_pipeline.runner"]

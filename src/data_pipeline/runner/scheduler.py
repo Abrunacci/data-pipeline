@@ -1,8 +1,8 @@
-"""Running every series on its interval, in the runner's process or inside the API's.
+"""Running every series on its interval.
 
-Runs are aligned to the clock (every 10 minutes means :00, :10, :20…), so two processes alive at
-once during a deploy aim at the same slots. ``Store.exclusive`` lets only one of them run a
-series at a time, and a slot that already has an attempt is skipped, so a slot runs once.
+Runs are aligned to the clock (every 10 minutes means :00, :10, :20…). ``SeriesStore.exclusive``
+stops a slow run and the next slot from overlapping, and a slot that already has an attempt is
+skipped, so a slot runs once.
 """
 
 from __future__ import annotations
@@ -16,11 +16,10 @@ import httpx
 
 from data_pipeline.core.readings import Accepted
 from data_pipeline.core.series import Series
-from data_pipeline.core.sources import HistorySource, Source
-from data_pipeline.runner.backfill import backfill
+from data_pipeline.core.sources import Source
 from data_pipeline.runner.collect import Clock, collect
 from data_pipeline.runner.destination import Destination
-from data_pipeline.runner.store import SeriesStore, Store
+from data_pipeline.runner.store import SeriesStore
 
 logger = logging.getLogger(__name__)
 
@@ -87,22 +86,3 @@ async def run_forever(
             logger.exception("run of %s failed", series.id)
         next_slot = slot_start(now(), series.every) + series.every
         await sleep((next_slot - now()).total_seconds())
-
-
-async def run_series(
-    series: Series,
-    sources: Mapping[str, Source],
-    histories: Mapping[str, HistorySource],
-    client: httpx.AsyncClient,
-    store: Store,
-    now: Clock = lambda: datetime.now(UTC),
-    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-) -> None:
-    """Load the series' past values if it has a history source and they are not loaded yet,
-    then run it forever. A failed load never stops the schedule; the next start retries it."""
-    if series.history is not None:
-        try:
-            await backfill(series, histories[series.history], client, store, now)
-        except Exception:
-            logger.exception("loading past values of %s failed", series.id)
-    await run_forever(series, sources, client, store, now, sleep)

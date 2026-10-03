@@ -14,12 +14,12 @@ from data_pipeline.core.gap import Gap
 from data_pipeline.core.readings import Accepted, Control, Observation, Reading
 from data_pipeline.core.sources import Request
 from data_pipeline.destinations.cuanto_cuesta import RATES, CuantoCuestaLog, batch, rate_item
-from data_pipeline.sources import available_history_sources, available_sources
+from data_pipeline.sources import available_sources
 
 pytestmark = pytest.mark.anyio
 
 SOURCES = available_sources()
-SERIES = {s.id: s for s in load_series(DEFAULT_SERIES_FILE, SOURCES, available_history_sources())}
+SERIES = {s.id: s for s in load_series(DEFAULT_SERIES_FILE, SOURCES)}
 ID = UUID("0b8e6a3c-5d1f-4c1e-9a77-2f0c8f3e1b20")
 # 12:00 in Buenos Aires.
 AS_OF = datetime(2026, 10, 1, 12, 0, tzinfo=timezone(timedelta(hours=-3)))

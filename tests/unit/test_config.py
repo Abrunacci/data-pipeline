@@ -11,12 +11,11 @@ from data_pipeline.config import (
     DEFAULT_SERIES_FILE,
     ConfigError,
     RunnerSettings,
-    Settings,
     load_gap_samples,
     load_series,
 )
 from data_pipeline.core.series import Series
-from data_pipeline.sources import available_history_sources, available_sources
+from data_pipeline.sources import available_sources
 
 VALID = """
 series:
@@ -34,14 +33,11 @@ series:
 def load(tmp_path: Path, text: str) -> tuple[Series, ...]:
     path = tmp_path / "series.yaml"
     path.write_text(text)
-    return load_series(path, available_sources(), available_history_sources())
+    return load_series(path, available_sources())
 
 
 def test_the_repo_series_file_loads() -> None:
-    series = {
-        s.id: s
-        for s in load_series(DEFAULT_SERIES_FILE, available_sources(), available_history_sources())
-    }
+    series = {s.id: s for s in load_series(DEFAULT_SERIES_FILE, available_sources())}
     assert list(series) == [
         "mep",
         "binance_p2p_usdt_usd",
@@ -104,15 +100,6 @@ def test_opening_hours_mistakes_are_config_errors(
 ) -> None:
     with pytest.raises(ConfigError, match=message):
         load(tmp_path, VALID + HOURS.replace(*change))
-
-
-def test_a_history_source_must_be_known_and_need_opening_hours(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="unknown history source 'nope'"):
-        load(tmp_path, VALID + HOURS + "\n    history: nope")
-    with pytest.raises(ConfigError, match="needs opening hours"):
-        load(tmp_path, VALID + "\n    history: argentinadatos_bolsa_compra_daily")
-    (series,) = load(tmp_path, VALID + HOURS + "\n    history: argentinadatos_bolsa_compra_daily")
-    assert series.history == "argentinadatos_bolsa_compra_daily"
 
 
 def test_a_control_must_be_a_known_source_other_than_the_primary(tmp_path: Path) -> None:
@@ -225,14 +212,6 @@ def test_repeated_series_ids_are_refused(tmp_path: Path) -> None:
     entry = VALID.split("series:\n", 1)[1]
     with pytest.raises(ConfigError, match="repeated series ids"):
         load(tmp_path, VALID + entry)
-
-
-def test_cors_origins_are_read_as_a_comma_separated_list(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://localhost/test")
-    monkeypatch.setenv("CORS_ORIGINS", "https://a.example, https://b.example,")
-    assert Settings().cors_origins == ("https://a.example", "https://b.example")
 
 
 def test_the_runner_needs_no_database(monkeypatch: pytest.MonkeyPatch) -> None:
