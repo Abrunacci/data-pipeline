@@ -151,9 +151,10 @@ default (see the [README](../README.md#the-runner)), so the server sets neither.
   its hours), so a deploy leaves a gap of about the restart's length.
 - **Restarts:** `restart: unless-stopped` when the process exits; a hung process is not restarted,
   only reported unhealthy.
-- **Logs:** stdout and stderr, into the server's journal tagged `backend.data-pipeline`. The
-  journal takes at most 10,000 lines every 30 seconds across all containers, so never log per row:
-  the runner logs one line per attempt and one per item cuanto-cuesta answers for.
+- **Logs:** stdout and stderr, into the server's journal tagged `backend.data-pipeline` (see
+  [Logs on the server](#logs-on-the-server)). The journal takes at most 10,000 lines every 30
+  seconds across all containers, so never log per row: the runner logs one line per attempt and
+  one per item cuanto-cuesta answers for.
 - **Memory:** 256 MB, no swap; over it, the kernel kills the process.
 
 ## When cuanto-cuesta does not take a value
@@ -189,7 +190,7 @@ network errors and 5xx, and then the series' next source is tried.
 | `Host key verification failed` | `DEPLOY_KNOWN_HOSTS` does not match the server | regenerate it (infra's guide) |
 | `deploy-backend: the backend's secrets are not ready: …` | the token copy is missing or out of date | on the server: `sudo project-secret data-pipeline list`, then `sudo project-secret data-pipeline sync` |
 | `deploy-backend: cannot pull …: unauthorized` | the server cannot pull the image | check the package is still public |
-| `deploy-backend: release … not healthy within 60s (…); back to release …, which is healthy` | the new image did not turn healthy | read the container's log on the server (infra: "Backend logs"); it never goes to CI |
+| `deploy-backend: release … not healthy within 60s (…); back to release …, which is healthy` | the new image did not turn healthy | read the failed release's last lines under `backend-log` (see [Logs on the server](#logs-on-the-server)); they never go to CI |
 | `… there is no earlier release, so the backend was stopped` | the first deploy failed | the same |
 | `another deploy, rollback or secret change of data-pipeline is running` | two deploys at once, or a token rotation in progress | run the job again |
 
@@ -200,6 +201,20 @@ network errors and 5xx, and then the series' next source is tried.
   failures in a row (10 minutes) send an email. If the beats stop, it fails after 15 minutes.
 - A series that fails (a source down, cuanto-cuesta down, a 401) does not change the health
   check: it only shows in the log.
-- On the server: `sudo backend-status data-pipeline`,
-  `sudo journalctl -t backend.data-pipeline --since -1h`, `sudo journalctl -t deploy-backend`,
-  and `sudo backend-rollback data-pipeline` to go back a release.
+- On the server: `sudo backend-status data-pipeline`, `sudo journalctl -t deploy-backend` for
+  what each deploy did, and `sudo backend-rollback data-pipeline` to go back a release.
+
+### Logs on the server
+
+Two journal tags carry this project's logs, and only the owner can read them on the server:
+
+| Tag | What it holds | When it appears | Command |
+|---|---|---|---|
+| `backend.data-pipeline` | everything the running container writes to stdout and stderr | always, for the release that is running | `sudo journalctl -t backend.data-pipeline --since -1h` |
+| `backend-log` | the last 30 lines of a release that did not turn healthy | only when a deploy fails and `deploy-backend` puts back the previous release (or stops the backend on a first deploy) | `sudo journalctl -t backend-log --since -1h` |
+
+They are not two names for the same thing: the runner writes `backend.data-pipeline`, and
+`deploy-backend` writes `backend-log`, only for a release it rejected. After a failed deploy, look
+at `backend-log` for why the new release failed, and at `backend.data-pipeline` for the release
+that runs again. `sudo docker logs -f backend-data-pipeline-backend-1` follows the current
+container only.
