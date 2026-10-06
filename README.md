@@ -121,16 +121,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the conventions and how to run the ch
 
 CI deploys what lands on `main`: it pushes the image to `ghcr.io/abrunacci/data-pipeline`, then
 asks the server, over SSH, to switch to it by digest. The server keeps the new container only if
-its `HEALTHCHECK` turns healthy, and otherwise puts back the previous release. The server side
-(the project's entry, the deploy key, rollbacks) lives in the infra repository.
-
-The `production` environment, limited to `main`, holds everything the deploy job reads. None of it
-is in the repository:
-
-| Name | Kind | |
-|---|---|---|
-| `DEPLOY_SSH_KEY` | secret | the private deploy key |
-| `DEPLOY_KNOWN_HOSTS` | secret | the server's host key line; `[host]:port` when the port is not 22 |
-| `DEPLOY_HOST` | variable | the server's name |
-| `DEPLOY_PORT` | variable | its SSH port |
-| `DEPLOY_USER` | variable | the user the deploy key is restricted to |
+its `HEALTHCHECK` turns healthy, and otherwise puts back the previous release. See
+[docs/deploy.md](docs/deploy.md) for the settings it needs, what the server expects from the
+container, and what to do when a deploy fails.
